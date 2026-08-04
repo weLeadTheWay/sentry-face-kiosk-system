@@ -11,13 +11,35 @@ return new class extends Migration
      */
     public function up(): void
     {
+        Schema::create('roles', function (Blueprint $table) {
+            $table->id('role_id');
+            $table->string('role_name', 100);
+            $table->text('description')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('permissions', function (Blueprint $table) {
+            $table->id('permission_id');
+            $table->string('permission_key', 150)->unique();
+            $table->string('permission_name', 100);
+            $table->text('description')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('role_permissions', function (Blueprint $table) {
+            $table->foreignId('role_id')->constrained('roles', 'role_id')->onDelete('cascade');
+            $table->foreignId('permission_id')->constrained('permissions', 'permission_id')->onDelete('cascade');
+            $table->primary(['role_id', 'permission_id']);
+        });
+
         Schema::create('users', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->string('email')->unique();
-            $table->timestamp('email_verified_at')->nullable();
-            $table->string('password');
-            $table->rememberToken();
+            $table->id('user_id');
+            $table->foreignId('role_id')->constrained('roles', 'role_id')->onDelete('restrict');
+            $table->string('user_name', 100);
+            $table->string('user_email', 255)->unique();
+            $table->string('hash_password', 255);
+            $table->boolean('is_active')->default(true);
+            $table->string('remember_token', 100)->nullable();
             $table->timestamps();
         });
 

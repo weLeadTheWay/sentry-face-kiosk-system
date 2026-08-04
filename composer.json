@@ -1,8 +1,8 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "sentry/face-kiosk",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
+    "description": "Sentry Face Kiosk - Biosecurity, visitor, and employee tracking system with face recognition.",
     "keywords": ["laravel", "framework"],
     "license": "MIT",
     "require": {
