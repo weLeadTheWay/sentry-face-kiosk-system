@@ -13,6 +13,9 @@ Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
 Route::middleware('auth')->group(function () {
     Route::get('/admin/dashboard', function () {
+        if (request()->ajax()) {
+            return view('admin.dashboard-content');
+        }
         return view('admin.dashboard');
     })->name('dashboard');
 

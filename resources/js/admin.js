@@ -1,3 +1,6 @@
+import $ from 'jquery';
+window.$ = $;
+
 $(document).ready(function() {
     const contentPane = $('#content');
 
