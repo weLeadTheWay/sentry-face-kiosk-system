@@ -289,6 +289,11 @@
                     }),
                 });
 
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error (${response.status}): ${errorText.substring(0, 100)}`);
+                }
+
                 const result = await response.json();
                 if (result.success) {
                     updateStatus(result.message, 'success');
@@ -334,6 +339,11 @@
                         descriptor: [0.1, 0.2, 0.3],
                     }),
                 });
+
+                if (!response.ok) {
+                    console.error('Recognition failed:', response.status);
+                    return;
+                }
 
                 const result = await response.json();
                 if (result.success) {
