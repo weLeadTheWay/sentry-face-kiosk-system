@@ -204,6 +204,15 @@
         let isProcessingAction = false;
         let stream = null;
 
+        // State machine for kiosk flow
+        const STATES = {
+            IDLE: 'IDLE',                    // Ready to recognize faces
+            DETECTED: 'DETECTED',            // Face matched, showing action buttons
+            PROCESSING: 'PROCESSING',        // Processing an action (entry/exit)
+        };
+        let currentState = STATES.IDLE;
+        let lastRecognizedDirectoryId = null;
+
         function submitToken() {
             const token = document.getElementById('token-input').value.trim();
             if (!token) {
@@ -259,10 +268,12 @@
         }
 
         async function processAction(action) {
-            if (!currentVisitorRequest || isProcessingAction) {
+            if (!currentVisitorRequest) {
                 return;
             }
 
+            // Move to PROCESSING state
+            currentState = STATES.PROCESSING;
             isProcessingAction = true;
 
             try {
@@ -301,18 +312,36 @@
                         status: result.session_status,
                     };
                     showActionButtons(currentVisitorRequest.session_state);
+
+                    // After action completes, reset to IDLE for next recognition
+                    setTimeout(() => {
+                        resetToIdle();
+                    }, 2000);
                 } else {
                     updateStatus(result.message, 'error');
+                    // On error, return to DETECTED state to allow retry
+                    currentState = STATES.DETECTED;
                 }
             } catch (err) {
                 updateStatus('Error: ' + err.message, 'error');
+                // On error, return to DETECTED state to allow retry
+                currentState = STATES.DETECTED;
             } finally {
                 isProcessingAction = false;
             }
         }
 
+        function resetToIdle() {
+            currentState = STATES.IDLE;
+            lastRecognizedDirectoryId = null;
+            currentVisitorRequest = null;
+            updateStatus('Scan your face...', 'info');
+            showActionButtons(null);
+        }
+
         async function attemptFaceRecognition() {
-            if (!stream || isProcessingAction) {
+            // Only recognize when in IDLE state, not while processing or when face already detected
+            if (!stream || currentState !== STATES.IDLE) {
                 return;
             }
 
@@ -342,9 +371,20 @@
 
                 const result = await response.json();
                 if (result.success) {
+                    // Prevent re-recognizing the same person multiple times
+                    if (lastRecognizedDirectoryId === result.directory.directory_id) {
+                        return;
+                    }
+
+                    // Update state and data
+                    currentState = STATES.DETECTED;
+                    lastRecognizedDirectoryId = result.directory.directory_id;
                     currentVisitorRequest = result;
                     updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
                     showActionButtons(result.session_state);
+                } else {
+                    // No match, stay in IDLE state
+                    updateStatus('Scan your face...', 'info');
                 }
             } catch (err) {
                 console.error('Recognition error:', err);
