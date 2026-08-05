@@ -11,6 +11,12 @@ Route::get('/login', [LoginController::class, 'show'])->name('login');
 Route::post('/login', [LoginController::class, 'store'])->name('login.store');
 Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
+Route::get('/register/visitor', [\App\Http\Controllers\Visitor\RegistrationController::class, 'show'])->name('visitor.register');
+Route::get('/register/visitor/search', [\App\Http\Controllers\Visitor\RegistrationController::class, 'searchName'])->name('visitor.search');
+Route::post('/register/visitor/capture', [\App\Http\Controllers\Visitor\RegistrationController::class, 'captureFace'])->name('visitor.capture');
+Route::post('/register/visitor/confirm', [\App\Http\Controllers\Visitor\RegistrationController::class, 'confirmMatch'])->name('visitor.confirm');
+Route::get('/register/visitor/success', [\App\Http\Controllers\Visitor\RegistrationController::class, 'success'])->name('visitor.success');
+
 Route::middleware('auth')->group(function () {
     Route::get('/admin/dashboard', function () {
         if (request()->ajax()) {
