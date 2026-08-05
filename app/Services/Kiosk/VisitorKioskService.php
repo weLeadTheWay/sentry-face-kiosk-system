@@ -6,10 +6,14 @@ use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
 use App\Models\VisitorEntryLog;
 use App\Models\KioskDevice;
+use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Support\Facades\Storage;
 
 class VisitorKioskService
 {
+    public function __construct(private ?VisitorSheetWriter $sheetWriter = null)
+    {
+    }
     public function resolveActiveRequest(int $visitorRequestId): ?array
     {
         $visitorRequest = VisitorRequest::find($visitorRequestId);
@@ -77,7 +81,7 @@ class VisitorKioskService
                 'first_in' => now(),
             ]);
 
-            VisitorEntryLog::create([
+            $entryLog = VisitorEntryLog::create([
                 'visitor_session_id' => $activeSession->visitor_session_id,
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'First Entry',
@@ -85,6 +89,10 @@ class VisitorKioskService
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
+
+            if ($this->sheetWriter) {
+                $this->sheetWriter->appendTimeIn($entryLog);
+            }
 
             return [
                 'success' => true,
@@ -154,7 +162,7 @@ class VisitorKioskService
                 'completed_at' => now(),
             ]);
 
-            VisitorEntryLog::create([
+            $exitLog = VisitorEntryLog::create([
                 'visitor_session_id' => $activeSession->visitor_session_id,
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'Final Exit',
@@ -162,6 +170,10 @@ class VisitorKioskService
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
+
+            if ($this->sheetWriter) {
+                $this->sheetWriter->appendTimeOut($exitLog);
+            }
 
             return [
                 'success' => true,
