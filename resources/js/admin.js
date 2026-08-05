@@ -40,7 +40,8 @@ $(document).ready(function() {
             processData: false,
             contentType: false,
             headers: {
-                'X-Requested-With': 'XMLHttpRequest'
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
             },
             success: function(response) {
                 contentPane.html(response);
