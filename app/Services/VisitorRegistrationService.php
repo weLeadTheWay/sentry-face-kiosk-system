@@ -25,6 +25,7 @@ class VisitorRegistrationService
             return [
                 'status' => 'face_found_different_directory',
                 'face_profile_id' => $existingMatch->face_profile_id,
+                'directory_id' => $existingMatch->directory_id,
                 'message' => 'A matching face was found from a previous visit.',
             ];
         }

@@ -88,8 +88,21 @@ class RegistrationController extends Controller
             $faceImageBase64
         );
 
+        // Check if face was found in a different directory
+        if ($result['status'] === 'face_found_different_directory') {
+            // Ask user: "Is this you?" before linking
+            return response()->json([
+                'success' => false,
+                'status' => 'face_found_different_directory',
+                'message' => 'A face matching yours was found. Is this you?',
+                'directory_id' => $result['directory_id'],
+            ]);
+        }
+
+        // Face registration successful (new face or confirmed match)
         return response()->json([
             'success' => true,
+            'status' => $result['status'],
             'data' => $result,
         ]);
     }

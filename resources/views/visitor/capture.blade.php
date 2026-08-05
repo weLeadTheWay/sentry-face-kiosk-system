@@ -121,6 +121,17 @@
                 <div class="spinner"></div>
                 <p>Processing face...</p>
             </div>
+
+            <div id="face-match-prompt" style="display: none; margin-top: 20px; text-align: center;">
+                <p style="font-size: 16px; margin-bottom: 20px; color: #333;">
+                    <strong>This face is already registered.</strong><br>
+                    Is this you?
+                </p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button class="btn" onclick="confirmFaceMatch(true)" style="background: #28a745;">Yes, It's Me</button>
+                    <button class="btn" onclick="confirmFaceMatch(false)" style="background: #dc3545;">No, Different Person</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -128,6 +139,7 @@
         const token = new URL(window.location).searchParams.get('token');
         const option = new URL(window.location).searchParams.get('option') || 'A';
         let stream = null;
+        let lastDirectoryId = null;
 
         async function initCamera() {
             try {
@@ -166,10 +178,53 @@
             .then(res => res.json())
             .then(data => {
                 document.getElementById('loading').style.display = 'none';
+
+                // NEW: Handle face found in different directory
+                if (data.status === 'face_found_different_directory') {
+                    lastDirectoryId = data.directory_id;
+                    document.querySelector('.controls').style.display = 'none';
+                    document.getElementById('face-match-prompt').style.display = 'block';
+                    document.getElementById('status').textContent = 'Found existing face...';
+                    return;
+                }
+
                 if (data.success) {
                     window.location.href = '/register/visitor/success?token=' + token;
                 } else {
                     document.getElementById('status').textContent = data.message || 'Error processing face';
+                }
+            })
+            .catch(err => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status').textContent = 'Error: ' + err.message;
+            });
+        }
+
+        // NEW: Handle user confirming or denying face match
+        function confirmFaceMatch(isConfirmed) {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('face-match-prompt').style.display = 'none';
+            document.getElementById('status').textContent = 'Processing...';
+
+            fetch('/register/visitor/confirm', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                },
+                body: JSON.stringify({
+                    token: token,
+                    directory_id: lastDirectoryId,
+                    confirmed: isConfirmed,
+                }),
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('loading').style.display = 'none';
+                if (data.success) {
+                    window.location.href = '/register/visitor/success?token=' + token;
+                } else {
+                    document.getElementById('status').textContent = data.message || 'Error processing';
                 }
             })
             .catch(err => {
