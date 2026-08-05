@@ -170,7 +170,7 @@
         }
     </style>
 </head>
-<body>
+<body data-kiosk-id="{{ $kiosk->kiosk_id }}">
     <div class="kiosk-container" id="main-view" style="display:none;">
         <div class="logo">{{ config('app.name') }} Kiosk</div>
 
