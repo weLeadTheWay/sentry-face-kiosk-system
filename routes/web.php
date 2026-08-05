@@ -20,7 +20,7 @@ Route::middleware('auth')->group(function () {
     })->name('dashboard');
 
     Route::resource('admin/farms', \App\Http\Controllers\Admin\FarmController::class)->middleware('permission:farms.manage');
-    Route::resource('admin/kiosks', \App\Http\Controllers\Admin\KioskDeviceController::class)->middleware('permission:kiosks.manage')->parameter('kiosk', 'kiosk_device');
+    Route::resource('admin/kiosks', \App\Http\Controllers\Admin\KioskDeviceController::class)->middleware('permission:kiosks.manage');
     Route::resource('admin/identity-types', \App\Http\Controllers\Admin\IdentityTypeController::class)->middleware('permission:identity_types.manage')->parameter('identity_type', 'identity_type');
     Route::resource('admin/employee-types', \App\Http\Controllers\Admin\EmployeeTypeController::class)->middleware('permission:employee_types.manage')->parameter('employee_type', 'employee_type');
     Route::resource('admin/biosecurity-rules', \App\Http\Controllers\Admin\BiosecurityRuleController::class)->middleware('permission:biosecurity.manage')->parameter('biosecurity_rule', 'biosecurity_rule');

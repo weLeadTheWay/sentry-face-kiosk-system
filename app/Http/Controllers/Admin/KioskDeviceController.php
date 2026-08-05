@@ -28,21 +28,22 @@ class KioskDeviceController extends Controller
         return $this->index();
     }
 
-    public function edit(KioskDevice $kiosk_device)
+    public function edit(KioskDevice $kiosk)
     {
         $farms = FarmList::all();
+        $kiosk_device = $kiosk;
         return $this->view('admin.kiosks._edit', compact('kiosk_device', 'farms'));
     }
 
-    public function update(UpdateKioskDeviceRequest $request, KioskDevice $kiosk_device)
+    public function update(UpdateKioskDeviceRequest $request, KioskDevice $kiosk)
     {
-        $kiosk_device->update($request->validated());
+        $kiosk->update($request->validated());
         return $this->index();
     }
 
-    public function destroy(KioskDevice $kiosk_device)
+    public function destroy(KioskDevice $kiosk)
     {
-        $kiosk_device->delete();
+        $kiosk->delete();
         return $this->index();
     }
 

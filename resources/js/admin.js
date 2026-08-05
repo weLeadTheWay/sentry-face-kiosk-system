@@ -25,7 +25,6 @@ $(document).ready(function() {
         const form = $(this);
         const url = form.attr('action');
         let method = form.attr('method') || 'POST';
-        const formData = new FormData(this);
 
         // Check for Laravel's _method field (for DELETE, PUT, PATCH)
         const methodField = form.find('input[name="_method"]');
@@ -33,12 +32,13 @@ $(document).ready(function() {
             method = methodField.val();
         }
 
+        // Use form serialization instead of FormData for better compatibility
+        const formData = form.serialize();
+
         $.ajax({
             url: url,
-            method: method,
+            type: method,
             data: formData,
-            processData: false,
-            contentType: false,
             headers: {
                 'X-Requested-With': 'XMLHttpRequest',
                 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
