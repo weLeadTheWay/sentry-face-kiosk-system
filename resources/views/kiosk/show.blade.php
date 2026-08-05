@@ -201,8 +201,7 @@
         const kioskId = '{{ $kiosk->kiosk_id }}';
         let kioskToken = localStorage.getItem('kiosk_token_' + kioskId);
         let currentVisitorRequest = null;
-        let recognitionAttempts = 0;
-        const MAX_RECOGNITION_ATTEMPTS = 3;
+        let isProcessingAction = false;
         let stream = null;
 
         function submitToken() {
@@ -260,10 +259,11 @@
         }
 
         async function processAction(action) {
-            if (!currentVisitorRequest) {
-                updateStatus('No visitor found', 'error');
+            if (!currentVisitorRequest || isProcessingAction) {
                 return;
             }
+
+            isProcessingAction = true;
 
             try {
                 const video = document.getElementById('webcam');
@@ -274,7 +274,7 @@
                 ctx.drawImage(video, 0, 0);
                 const photoBase64 = canvas.toDataURL('image/jpeg');
 
-                updateStatus('Processing...');
+                updateStatus('Processing...', 'info');
                 const response = await fetch(`/kiosk/${kioskId}/entry`, {
                     method: 'POST',
                     headers: {
@@ -306,15 +306,13 @@
                 }
             } catch (err) {
                 updateStatus('Error: ' + err.message, 'error');
+            } finally {
+                isProcessingAction = false;
             }
         }
 
         async function attemptFaceRecognition() {
-            if (!stream || recognitionAttempts >= MAX_RECOGNITION_ATTEMPTS) {
-                return;
-            }
-
-            if (currentVisitorRequest) {
+            if (!stream || isProcessingAction) {
                 return;
             }
 
@@ -339,7 +337,6 @@
                 });
 
                 if (!response.ok) {
-                    console.error('Recognition failed:', response.status);
                     return;
                 }
 
@@ -348,14 +345,6 @@
                     currentVisitorRequest = result;
                     updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
                     showActionButtons(result.session_state);
-                    recognitionAttempts = 0;
-                } else {
-                    recognitionAttempts++;
-                    if (recognitionAttempts >= MAX_RECOGNITION_ATTEMPTS) {
-                        updateStatus('Face recognition failed. Please scan QR code.', 'error');
-                    } else {
-                        updateStatus(`Face not recognized. Try again (${recognitionAttempts}/${MAX_RECOGNITION_ATTEMPTS})`, 'error');
-                    }
                 }
             } catch (err) {
                 console.error('Recognition error:', err);
