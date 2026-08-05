@@ -1,9 +1,9 @@
 *.log
 .DS_Store
 .env
-/credentials
 .env.backup
 .env.production
+.env.local
 .phpactor.json
 .phpunit.result.cache
 /.fleet
@@ -19,7 +19,36 @@
 /public/storage
 /storage/*.key
 /storage/pail
+/storage/logs
 /vendor
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Sensitive data & credentials
+/credentials
+/credentials/**
+credentials/
+credentials/**
+*.json.example
+.env.*.local
+
+# Project-specific
+/documents
+/docs/private
+
+# Database
+database/database.sqlite
+*.sqlite
+*.db
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
