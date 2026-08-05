@@ -297,8 +297,10 @@
                 const result = await response.json();
                 if (result.success) {
                     updateStatus(result.message, 'success');
-                    currentVisitorRequest.session_state = result.session_status;
-                    showActionButtons(result);
+                    currentVisitorRequest.session_state = {
+                        status: result.session_status,
+                    };
+                    showActionButtons(currentVisitorRequest.session_state);
                 } else {
                     updateStatus(result.message, 'error');
                 }

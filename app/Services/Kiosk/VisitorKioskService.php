@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Storage;
 
 class VisitorKioskService
 {
-    public function __construct(private VisitorSheetWriter $sheetWriter)
+    public function __construct(private ?VisitorSheetWriter $sheetWriter = null)
     {
     }
     public function resolveActiveRequest(int $visitorRequestId): ?array
@@ -90,7 +90,13 @@ class VisitorKioskService
                 'datetime' => now(),
             ]);
 
-            $this->sheetWriter->appendTimeIn($entryLog);
+            if ($this->sheetWriter) {
+                try {
+                    $this->sheetWriter->appendTimeIn($entryLog);
+                } catch (\Exception $e) {
+                    \Log::error('Google Sheets Time In write failed: ' . $e->getMessage());
+                }
+            }
 
             return [
                 'success' => true,
@@ -169,7 +175,13 @@ class VisitorKioskService
                 'datetime' => now(),
             ]);
 
-            $this->sheetWriter->appendTimeOut($exitLog);
+            if ($this->sheetWriter) {
+                try {
+                    $this->sheetWriter->appendTimeOut($exitLog);
+                } catch (\Exception $e) {
+                    \Log::error('Google Sheets Time Out write failed: ' . $e->getMessage());
+                }
+            }
 
             return [
                 'success' => true,
