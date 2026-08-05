@@ -24,7 +24,7 @@
                     <td>
                         <a href="{{ route('users.edit', $user) }}" class="btn ajax-link" style="background: #17a2b8; font-size: 12px;">Edit</a>
                         @if($user->user_id !== auth()->user()->user_id)
-                            <form method="POST" action="{{ route('users.destroy', $user) }}" style="display: inline;" onsubmit="return confirm('Are you sure?');">
+                            <form method="POST" action="{{ route('users.destroy', $user) }}" class="ajax-form" style="display: inline;" onsubmit="return confirm('Are you sure?');">
                                 @csrf
                                 @method('DELETE')
                                 <button type="submit" class="btn btn-danger" style="font-size: 12px;">Delete</button>

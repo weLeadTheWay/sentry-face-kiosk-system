@@ -12,8 +12,8 @@ class BiosecurityRuleController extends Controller
 {
     public function index()
     {
-        $rules = BiosecurityRule::with('originFarm', 'destinationFarm')->paginate(config('sentry.pagination'));
-        return $this->view('admin.biosecurity-rules._index', compact('rules'));
+        $biosecurity_rules = BiosecurityRule::with('originFarm', 'destinationFarm')->paginate(config('sentry.pagination'));
+        return $this->view('admin.biosecurity-rules._index', compact('biosecurity_rules'));
     }
 
     public function create()

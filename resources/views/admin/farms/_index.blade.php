@@ -23,7 +23,7 @@
                     <td><span style="background: {{ $farm->is_active ? '#28a745' : '#dc3545' }}; color: white; padding: 4px 8px; border-radius: 3px; font-size: 12px;">{{ $farm->is_active ? 'Active' : 'Inactive' }}</span></td>
                     <td>
                         <a href="{{ route('farms.edit', $farm) }}" class="btn ajax-link" style="background: #17a2b8; font-size: 12px;">Edit</a>
-                        <form method="POST" action="{{ route('farms.destroy', $farm) }}" style="display: inline;" onsubmit="return confirm('Are you sure?');">
+                        <form method="POST" action="{{ route('farms.destroy', $farm) }}" class="ajax-form" style="display: inline;" onsubmit="return confirm('Are you sure?');">
                             @csrf
                             @method('DELETE')
                             <button type="submit" class="btn btn-danger" style="font-size: 12px;">Delete</button>

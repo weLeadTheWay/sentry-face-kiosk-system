@@ -53,7 +53,7 @@
 
         <div class="form-group">
             <label>
-                <input type="checkbox" name="is_active" value="1" checked>
+                <input type="hidden" name="is_active" value="0"><input type="checkbox" name="is_active" value="1" checked>
                 Active
             </label>
         </div>

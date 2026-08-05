@@ -24,8 +24,14 @@ $(document).ready(function() {
         e.preventDefault();
         const form = $(this);
         const url = form.attr('action');
-        const method = form.attr('method') || 'POST';
+        let method = form.attr('method') || 'POST';
         const formData = new FormData(this);
+
+        // Check for Laravel's _method field (for DELETE, PUT, PATCH)
+        const methodField = form.find('input[name="_method"]');
+        if (methodField.length) {
+            method = methodField.val();
+        }
 
         $.ajax({
             url: url,

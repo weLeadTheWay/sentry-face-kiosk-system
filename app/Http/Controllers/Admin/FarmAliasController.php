@@ -12,8 +12,8 @@ class FarmAliasController extends Controller
 {
     public function index()
     {
-        $aliases = FarmAlias::with('farm')->paginate(config('sentry.pagination'));
-        return $this->view('admin.farm-aliases._index', compact('aliases'));
+        $farm_aliases = FarmAlias::with('farm')->paginate(config('sentry.pagination'));
+        return $this->view('admin.farm-aliases._index', compact('farm_aliases'));
     }
 
     public function create()

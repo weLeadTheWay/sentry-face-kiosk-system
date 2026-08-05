@@ -29,7 +29,7 @@
 
         <div class="form-group">
             <label>
-                <input type="checkbox" name="is_active" value="1" {{ old('is_active', true) ? 'checked' : '' }}>
+                <input type="hidden" name="is_active" value="0"><input type="checkbox" name="is_active" value="1" {{ old('is_active', true) ? 'checked' : '' }}>
                 Active
             </label>
         </div>

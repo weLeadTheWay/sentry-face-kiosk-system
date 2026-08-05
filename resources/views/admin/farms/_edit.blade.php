@@ -30,7 +30,8 @@
 
         <div class="form-group">
             <label>
-                <input type="checkbox" name="is_active" value="1" {{ old('is_active', $farm->is_active) ? 'checked' : '' }}>
+                <input type="hidden" name="is_active" value="0">
+                <input type="hidden" name="is_active" value="0"><input type="checkbox" name="is_active" value="1" {{ old('is_active', $farm->is_active) ? 'checked' : '' }}>
                 Active
             </label>
         </div>
