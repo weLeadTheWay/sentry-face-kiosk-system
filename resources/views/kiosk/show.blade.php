@@ -197,12 +197,17 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
         let kioskToken = localStorage.getItem('kiosk_token_' + kioskId);
         let currentVisitorRequest = null;
         let isProcessingAction = false;
         let stream = null;
+        let modelsLoaded = false;
+        let noFaceStreak = 0;
+
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
         // State machine for kiosk flow
         const STATES = {
@@ -239,10 +244,24 @@
                     video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
                 });
                 document.getElementById('webcam').srcObject = stream;
-                document.getElementById('status-message').textContent = 'Ready for face recognition...';
             } catch (err) {
                 updateStatus('Camera access denied', 'error');
+                return;
             }
+
+            await loadModels();
+            updateStatus('Scan your face...', 'info');
+            detectionTick();
+        }
+
+        async function loadModels() {
+            updateStatus('Loading face recognition models...', 'info');
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+            ]);
+            modelsLoaded = true;
         }
 
         function updateStatus(message, type = 'info') {
@@ -335,24 +354,70 @@
             currentState = STATES.IDLE;
             lastRecognizedDirectoryId = null;
             currentVisitorRequest = null;
+            noFaceStreak = 0;
             updateStatus('Scan your face...', 'info');
             showActionButtons(null);
         }
 
-        async function attemptFaceRecognition() {
-            // Only recognize when in IDLE state, not while processing or when face already detected
-            if (!stream || currentState !== STATES.IDLE) {
+        // Self-scheduling loop: never overlaps itself, always waits for the
+        // previous detection to finish before scheduling the next one.
+        async function detectionTick() {
+            try {
+                await runDetectionCycle();
+            } catch (err) {
+                console.error('Detection error:', err);
+            }
+            setTimeout(detectionTick, 600);
+        }
+
+        async function runDetectionCycle() {
+            if (!stream || !modelsLoaded || currentState === STATES.PROCESSING) {
+                return;
+            }
+
+            const video = document.getElementById('webcam');
+            if (video.readyState < 2) {
+                return;
+            }
+
+            const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+            if (currentState === STATES.DETECTED) {
+                // Someone is already recognized and action buttons are shown.
+                // Only check whether a face is still present - if it disappears,
+                // finish the recognition immediately and go back to scanning.
+                const presence = await faceapi.detectSingleFace(video, options);
+                if (!presence) {
+                    noFaceStreak++;
+                    if (noFaceStreak >= 2) {
+                        resetToIdle();
+                    }
+                } else {
+                    noFaceStreak = 0;
+                }
+                return;
+            }
+
+            // IDLE state: look for an actual face and extract its real descriptor.
+            const detection = await faceapi
+                .detectSingleFace(video, options)
+                .withFaceLandmarks()
+                .withFaceDescriptor();
+
+            if (!detection) {
+                noFaceStreak = 0;
+                return;
+            }
+
+            await attemptFaceRecognition(Array.from(detection.descriptor));
+        }
+
+        async function attemptFaceRecognition(descriptorArray) {
+            if (currentState !== STATES.IDLE) {
                 return;
             }
 
             try {
-                const video = document.getElementById('webcam');
-                const canvas = document.createElement('canvas');
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0);
-
                 const response = await fetch(`/kiosk/${kioskId}/recognize`, {
                     method: 'POST',
                     headers: {
@@ -361,7 +426,7 @@
                         'X-KIOSK-TOKEN': kioskToken,
                     },
                     body: JSON.stringify({
-                        descriptor: [0.1, 0.2, 0.3],
+                        descriptor: descriptorArray,
                     }),
                 });
 
@@ -371,27 +436,20 @@
 
                 const result = await response.json();
                 if (result.success) {
-                    // Prevent re-recognizing the same person multiple times
-                    if (lastRecognizedDirectoryId === result.directory.directory_id) {
-                        return;
-                    }
-
-                    // Update state and data
                     currentState = STATES.DETECTED;
+                    noFaceStreak = 0;
                     lastRecognizedDirectoryId = result.directory.directory_id;
                     currentVisitorRequest = result;
                     updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
                     showActionButtons(result.session_state);
                 } else {
-                    // No match, stay in IDLE state
-                    updateStatus('Scan your face...', 'info');
+                    updateStatus('Face not recognized. Please register at the front desk.', 'error');
                 }
             } catch (err) {
                 console.error('Recognition error:', err);
             }
         }
 
-        setInterval(attemptFaceRecognition, 2000);
         initialize();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
