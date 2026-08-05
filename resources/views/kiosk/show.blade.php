@@ -297,12 +297,8 @@
                 const result = await response.json();
                 if (result.success) {
                     updateStatus(result.message, 'success');
-                    setTimeout(() => {
-                        currentVisitorRequest = null;
-                        recognitionAttempts = 0;
-                        updateStatus('Ready for face recognition...');
-                        showActionButtons(null);
-                    }, 2000);
+                    currentVisitorRequest.session_state = result.session_status;
+                    showActionButtons(result);
                 } else {
                     updateStatus(result.message, 'error');
                 }
