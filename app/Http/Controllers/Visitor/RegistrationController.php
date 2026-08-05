@@ -45,6 +45,25 @@ class RegistrationController extends Controller
         return response()->json(['results' => $results]);
     }
 
+    public function showCapture(Request $request)
+    {
+        $token = $request->query('token');
+
+        if (!$token) {
+            return view('visitor.capture', ['error' => 'Missing registration token.']);
+        }
+
+        $visitorRequest = VisitorRequest::where('registration_token', $token)
+            ->where('approval_status', 'Approved')
+            ->first();
+
+        if (!$visitorRequest) {
+            return view('visitor.capture', ['error' => 'Invalid or expired registration token.']);
+        }
+
+        return view('visitor.capture', ['visitorRequest' => $visitorRequest, 'token' => $token]);
+    }
+
     public function captureFace(Request $request)
     {
         $token = $request->input('token');
