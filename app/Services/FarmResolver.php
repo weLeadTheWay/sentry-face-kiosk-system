@@ -11,16 +11,29 @@ class FarmResolver
     {
         $rawName = trim($rawName);
 
+        // Step 1: Try exact alias match first
         $alias = FarmAlias::where('alias_text', $rawName)->first();
         if ($alias) {
             return $alias->farm;
         }
 
+        // Step 2: Try case-insensitive alias match
+        $alias = FarmAlias::whereRaw('UPPER(alias_text) = ?', [strtoupper($rawName)])->first();
+        if ($alias) {
+            return $alias->farm;
+        }
+
+        // Step 3: Normalize and search farm names
         $normalized = $this->normalize($rawName);
 
-        return FarmList::where('farm_name', $rawName)
-            ->orWhere('farm_name', 'like', '%' . $normalized . '%')
-            ->first();
+        // First try exact match on normalized farm name
+        $farm = FarmList::whereRaw('UPPER(farm_name) = ?', [$normalized])->first();
+        if ($farm) {
+            return $farm;
+        }
+
+        // Then try LIKE match for variations (e.g., "Madera Farm" matches "MADERA")
+        return FarmList::whereRaw('UPPER(farm_name) LIKE ?', ['%' . $normalized . '%'])->first();
     }
 
     private function normalize(string $name): string

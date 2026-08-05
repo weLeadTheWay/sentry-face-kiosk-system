@@ -90,12 +90,16 @@ class RegistrationController extends Controller
 
         // Check if face was found in a different directory
         if ($result['status'] === 'face_found_different_directory') {
+            // Get the matched directory details to show who it matched
+            $matchedDirectory = \App\Models\UserDirectory::find($result['directory_id']);
+
             // Ask user: "Is this you?" before linking
             return response()->json([
                 'success' => false,
                 'status' => 'face_found_different_directory',
                 'message' => 'A face matching yours was found. Is this you?',
                 'directory_id' => $result['directory_id'],
+                'matched_name' => $matchedDirectory ? $matchedDirectory->full_name : 'Unknown',
             ]);
         }
 

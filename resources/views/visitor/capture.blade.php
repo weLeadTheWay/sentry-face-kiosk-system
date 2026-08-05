@@ -123,9 +123,14 @@
             </div>
 
             <div id="face-match-prompt" style="display: none; margin-top: 20px; text-align: center;">
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <p style="font-size: 14px; color: #666; margin: 0 0 10px 0;">Matched Profile:</p>
+                    <p style="font-size: 18px; font-weight: 600; color: #333; margin: 0;" id="matched-name">
+                        Loading...
+                    </p>
+                </div>
                 <p style="font-size: 16px; margin-bottom: 20px; color: #333;">
-                    <strong>This face is already registered.</strong><br>
-                    Is this you?
+                    <strong>Is this you?</strong>
                 </p>
                 <div style="display: flex; gap: 10px; justify-content: center;">
                     <button class="btn" onclick="confirmFaceMatch(true)" style="background: #28a745;">Yes, It's Me</button>
@@ -184,6 +189,7 @@
                     lastDirectoryId = data.directory_id;
                     document.querySelector('.controls').style.display = 'none';
                     document.getElementById('face-match-prompt').style.display = 'block';
+                    document.getElementById('matched-name').textContent = data.matched_name || 'Unknown Person';
                     document.getElementById('status').textContent = 'Found existing face...';
                     return;
                 }
