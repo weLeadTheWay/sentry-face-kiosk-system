@@ -6,6 +6,7 @@ use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 class KioskDevice extends Model
 {
@@ -23,6 +24,7 @@ class KioskDevice extends Model
         'public_ip',
         'status',
         'last_seen_at',
+        'kiosk_token',
     ];
 
     protected function casts(): array
@@ -35,5 +37,32 @@ class KioskDevice extends Model
     public function farm(): BelongsTo
     {
         return $this->belongsTo(FarmList::class, 'farm_id', 'farm_id');
+    }
+
+    protected static function booting()
+    {
+        static::creating(function (self $model) {
+            if (!$model->kiosk_token) {
+                $model->kiosk_token = self::generateKioskToken();
+            }
+        });
+    }
+
+    public function regenerateToken(): self
+    {
+        $this->kiosk_token = self::generateKioskToken();
+        $this->save();
+        return $this;
+    }
+
+    private static function generateKioskToken(): string
+    {
+        for ($i = 0; $i < 3; $i++) {
+            $token = 'KIOSK_' . Str::upper(Str::random(32));
+            if (!self::where('kiosk_token', $token)->exists()) {
+                return $token;
+            }
+        }
+        throw new \Exception('Failed to generate unique kiosk_token after 3 attempts');
     }
 }
