@@ -17,6 +17,12 @@ Route::post('/register/visitor/capture', [\App\Http\Controllers\Visitor\Registra
 Route::post('/register/visitor/confirm', [\App\Http\Controllers\Visitor\RegistrationController::class, 'confirmMatch'])->name('visitor.confirm');
 Route::get('/register/visitor/success', [\App\Http\Controllers\Visitor\RegistrationController::class, 'success'])->name('visitor.success');
 
+Route::get('/kiosk/{kiosk}', [\App\Http\Controllers\Kiosk\KioskController::class, 'show'])->name('kiosk.show');
+Route::middleware('kiosk.auth')->group(function () {
+    Route::post('/kiosk/{kiosk}/recognize', [\App\Http\Controllers\Kiosk\KioskController::class, 'recognize'])->name('kiosk.recognize');
+    Route::post('/kiosk/{kiosk}/entry', [\App\Http\Controllers\Kiosk\KioskController::class, 'entry'])->name('kiosk.entry');
+});
+
 Route::middleware('auth')->group(function () {
     Route::get('/admin/dashboard', function () {
         if (request()->ajax()) {
@@ -27,6 +33,7 @@ Route::middleware('auth')->group(function () {
 
     Route::resource('admin/farms', \App\Http\Controllers\Admin\FarmController::class)->middleware('permission:farms.manage');
     Route::resource('admin/kiosks', \App\Http\Controllers\Admin\KioskDeviceController::class)->middleware('permission:kiosks.manage');
+    Route::post('admin/kiosks/{kiosk}/regenerate-token', [\App\Http\Controllers\Admin\KioskDeviceController::class, 'regenerateToken'])->name('kiosks.regenerate-token')->middleware('permission:kiosks.manage');
     Route::resource('admin/identity-types', \App\Http\Controllers\Admin\IdentityTypeController::class)->middleware('permission:identity_types.manage')->parameter('identity_type', 'identity_type');
     Route::resource('admin/employee-types', \App\Http\Controllers\Admin\EmployeeTypeController::class)->middleware('permission:employee_types.manage')->parameter('employee_type', 'employee_type');
     Route::resource('admin/biosecurity-rules', \App\Http\Controllers\Admin\BiosecurityRuleController::class)->middleware('permission:biosecurity.manage')->parameter('biosecurity_rule', 'biosecurity_rule');

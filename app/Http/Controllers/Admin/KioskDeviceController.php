@@ -47,6 +47,12 @@ class KioskDeviceController extends Controller
         return $this->index();
     }
 
+    public function regenerateToken(KioskDevice $kiosk)
+    {
+        $kiosk->regenerateToken();
+        return $this->index();
+    }
+
     private function view($view, $data = [])
     {
         if (request()->ajax()) {
