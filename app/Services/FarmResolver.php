@@ -26,22 +26,28 @@ class FarmResolver
         // Step 3: Normalize and search farm names
         $normalized = $this->normalize($rawName);
 
-        // First try exact match on normalized farm name
+        // Try exact match on normalized farm name
         $farm = FarmList::whereRaw('UPPER(farm_name) = ?', [$normalized])->first();
         if ($farm) {
             return $farm;
         }
 
-        // Then try LIKE match for variations (e.g., "Madera Farm" matches "MADERA")
-        return FarmList::whereRaw('UPPER(farm_name) LIKE ?', ['%' . $normalized . '%'])->first();
+        // Step 4: Only if exact normalized match fails, return null
+        // Do NOT do fuzzy LIKE match - it's too permissive and can match wrong farms
+        // User should either:
+        // 1. Create a farm_alias for the name variant, or
+        // 2. Use the exact farm name from the system
+        return null;
     }
 
     private function normalize(string $name): string
     {
         $name = strtoupper(trim($name));
-        $name = preg_replace('/^FARM\s+/', '', $name);
-        $name = preg_replace('/^FARMS\s+/', '', $name);
-        $name = preg_replace('/\s+$/', '', $name);
-        return $name;
+        // Only strip "FARM " or "FARMS " if it's a prefix (e.g., "FARM ALPHA" → "ALPHA")
+        // But NOT for "FARM A" which should remain "FARM A"
+        if (preg_match('/^FARM(?:S)?\s+(\w{2,})/', $name, $matches)) {
+            $name = $matches[1];
+        }
+        return trim($name);
     }
 }
