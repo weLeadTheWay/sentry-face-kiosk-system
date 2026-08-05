@@ -24,7 +24,6 @@ class KioskController extends Controller
 
     public function recognize(Request $request)
     {
-        $kiosk = $request->route('kiosk');
         $descriptor = $request->input('descriptor');
         $qrValue = $request->input('qr_value');
 
@@ -88,7 +87,7 @@ class KioskController extends Controller
 
     public function entry(Request $request)
     {
-        $kiosk = $request->route('kiosk');
+        $kiosk = $request->attributes->get('kiosk');
         $visitorRequestId = $request->input('visitor_request_id');
         $action = $request->input('action');
         $photoBase64 = $request->input('photo');
@@ -98,6 +97,13 @@ class KioskController extends Controller
                 'success' => false,
                 'message' => 'Missing visitor_request_id or action',
             ], 400);
+        }
+
+        if (!$kiosk) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kiosk authentication failed',
+            ], 401);
         }
 
         $result = $this->kioskService->processEntry($visitorRequestId, $action, $kiosk, $photoBase64);
