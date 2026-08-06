@@ -23,7 +23,7 @@ class VisitorSheetWriter
                 $this->formatDate($session->first_in),
                 $this->formatTime($session->first_in),
                 $directory->full_name ?? '',
-                $this->formatLoginId($directory->login_id ?? ''),
+                $this->formatSentryId($session->login_id ?? ''),
                 $visitorRequest->visitor_id ?? '',
                 $log->photo ?? '',
                 $this->publicPictureUrl($log->photo),
@@ -64,7 +64,7 @@ class VisitorSheetWriter
                 $this->formatDate($session->last_out),
                 $this->formatTime($session->last_out),
                 $directory->full_name ?? '',
-                $this->formatLoginId($directory->login_id ?? ''),
+                $this->formatSentryId($session->logout_id ?? ''),
                 $visitorRequest->visitor_id ?? '',
                 $log->photo ?? '',
                 $this->publicPictureUrl($log->photo),
@@ -110,13 +110,17 @@ class VisitorSheetWriter
         return $datetime->format('H:i:s');
     }
 
-    private function formatLoginId(string $loginId): string
+    /**
+     * Shared by Login ID (Time In) and Logout ID (Time Out) - both are
+     * independently-generated per-visit codes with identical SNTRY- prefixing.
+     */
+    private function formatSentryId(string $id): string
     {
-        if ($loginId === '') {
+        if ($id === '') {
             return '';
         }
 
-        return str_starts_with($loginId, 'SNTRY-') ? $loginId : 'SNTRY-' . $loginId;
+        return str_starts_with($id, 'SNTRY-') ? $id : 'SNTRY-' . $id;
     }
 
     /**

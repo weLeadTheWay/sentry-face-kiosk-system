@@ -73,6 +73,14 @@ class VisitorKioskService
             return ['success' => false, 'message' => 'This visit has already been completed. A new approved request is required.'];
         }
 
+        // Defense-in-depth: recognize() already rejects a farm mismatch
+        // before the kiosk ever shows an action button, but this guard
+        // guarantees no session/log/sheet write can ever happen for the
+        // wrong farm even if this endpoint were reached some other way.
+        if ($visitorRequest->farm_id !== $kiosk->farm_id) {
+            return ['success' => false, 'message' => 'This visitor is approved for a different farm and cannot be authenticated at this kiosk.'];
+        }
+
         $activeSession = VisitorSession::where('visitor_request_id', $visitorRequestId)
             ->whereIn('session_status', ['OPEN', 'Inside', 'Outside'])
             ->first();
@@ -83,9 +91,12 @@ class VisitorKioskService
         }
 
         if ($action === 'first_entry' && !$activeSession) {
+            // Login ID is generated fresh per visit (not per person) and
+            // saved before the Time In sheet write, per business rule.
             $activeSession = VisitorSession::create([
                 'visitor_request_id' => $visitorRequestId,
                 'session_status' => 'Inside',
+                'login_id' => VisitorSession::generateSessionCode('login_id'),
                 'first_in' => now(),
             ]);
 
@@ -171,8 +182,11 @@ class VisitorKioskService
                 return ['success' => false, 'message' => 'Already checked out'];
             }
 
+            // Logout ID is generated fresh per visit, independently of
+            // Login ID - the two must never be assumed to match.
             $activeSession->update([
                 'session_status' => 'Completed',
+                'logout_id' => VisitorSession::generateSessionCode('logout_id'),
                 'last_out' => now(),
                 'completed_at' => now(),
             ]);

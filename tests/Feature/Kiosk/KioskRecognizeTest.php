@@ -44,6 +44,11 @@ class KioskRecognizeTest extends TestCase
         ]);
     }
 
+    private function otherFarm(): FarmList
+    {
+        return FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+    }
+
     private function descriptor(float $seed): array
     {
         return array_fill(0, 128, $seed);
@@ -191,5 +196,71 @@ class KioskRecognizeTest extends TestCase
         $response = $this->recognize(['qr_value' => $visitorRequest->visitor_id]);
 
         $response->assertStatus(404)->assertJson(['success' => false, 'type' => 'qr_found_no_active_request']);
+    }
+
+    public function test_face_recognition_rejects_visitor_approved_for_a_different_farm(): void
+    {
+        $directory = $this->makeDirectoryWithFace(0.77);
+        $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.77)]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'wrong_farm']);
+        // Message must name the visitor's actually-approved farm and make
+        // clear the recognition itself succeeded - not a generic denial.
+        $this->assertStringContainsString('BETA', $response->json('message'));
+        $this->assertStringContainsString('Recognized successfully', $response->json('message'));
+        $this->assertEquals(0, VisitorSession::count(), 'no session may be created for a farm mismatch');
+    }
+
+    public function test_qr_recognition_rejects_visitor_approved_for_a_different_farm(): void
+    {
+        $directory = $this->makeDirectoryWithFace(0.78);
+        $visitorRequest = $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
+
+        $response = $this->recognize(['qr_value' => $visitorRequest->visitor_id]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'wrong_farm']);
+        $this->assertEquals(0, VisitorSession::count());
+    }
+
+    public function test_matching_farm_request_is_preferred_over_a_different_farm_request(): void
+    {
+        $directory = $this->makeDirectoryWithFace(0.79);
+        $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
+        $correctFarmRequest = $this->makeVisitorRequest($directory); // defaults to $this->farm (the kiosk's farm)
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.79)]);
+
+        $response->assertOk()->assertJson(['success' => true, 'type' => 'face_match']);
+        $this->assertEquals($correctFarmRequest->visitor_request_id, $response->json('visitor_request_id'));
+    }
+
+    public function test_active_wrong_farm_request_is_preferred_over_a_completed_same_farm_request(): void
+    {
+        $directory = $this->makeDirectoryWithFace(0.80);
+        $otherFarm = $this->otherFarm();
+
+        // An older visit to THIS kiosk's own farm, already completed.
+        $completedRequest = $this->makeVisitorRequest($directory, [
+            'request_status' => 'COMPLETED',
+        ]);
+
+        // A currently-active approved visit, but for a DIFFERENT farm.
+        $activeWrongFarmRequest = $this->makeVisitorRequest($directory, [
+            'farm_id' => $otherFarm->farm_id,
+        ]);
+
+        // Face recognition must surface the SAME "wrong farm" result the QR
+        // path already gets right (a direct visitor_id lookup with no
+        // candidate selection) - not "already completed", which would
+        // describe the wrong request entirely.
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.80)]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'wrong_farm']);
+        $this->assertStringContainsString('BETA', $response->json('message'));
+
+        $qrResponse = $this->recognize(['qr_value' => $activeWrongFarmRequest->visitor_id]);
+        $qrResponse->assertStatus(403)->assertJson(['success' => false, 'type' => 'wrong_farm']);
     }
 }

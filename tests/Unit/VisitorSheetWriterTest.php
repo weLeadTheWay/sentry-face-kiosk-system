@@ -20,7 +20,7 @@ class VisitorSheetWriterTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function makeEntryLog(): VisitorEntryLog
+    private function makeEntryLog(string $loginId = 'XEGQNVH1', ?string $logoutId = 'GWDWS8FA'): VisitorEntryLog
     {
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
         $farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
@@ -30,7 +30,7 @@ class VisitorSheetWriterTest extends TestCase
             'identity_type_id' => $identityType->identity_type_id,
             'person_reference' => $email,
             'first_name' => 'Juan', 'last_name' => 'Dela Cruz', 'full_name' => 'Louisa Reighn Alejo Santos',
-            'email' => $email, 'login_id' => 'XEGQNVH1',
+            'email' => $email,
         ]);
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
@@ -44,6 +44,8 @@ class VisitorSheetWriterTest extends TestCase
         $session = VisitorSession::create([
             'visitor_request_id' => $visitorRequest->visitor_request_id,
             'session_status' => 'Inside',
+            'login_id' => $loginId,
+            'logout_id' => $logoutId,
             'first_in' => \Carbon\Carbon::parse('2026-08-06 14:15:46'),
             'last_out' => \Carbon\Carbon::parse('2026-08-06 17:30:05'),
         ]);
@@ -85,9 +87,9 @@ class VisitorSheetWriterTest extends TestCase
         $this->assertStringContainsString('/storage/kiosk-photos/16/first_entry-6a742692e29e3.jpg', $pictureUrl);
     }
 
-    public function test_time_out_row_matches_required_format(): void
+    public function test_time_out_row_uses_logout_id_not_login_id(): void
     {
-        $log = $this->makeEntryLog();
+        $log = $this->makeEntryLog(loginId: 'XEGQNVH1', logoutId: 'GWDWS8FA');
         $mockClient = Mockery::mock(GoogleSheetsClient::class);
         $capturedRow = null;
         $mockClient->shouldReceive('appendRow')
@@ -103,44 +105,33 @@ class VisitorSheetWriterTest extends TestCase
 
         $this->assertEquals('8/06/2026', $dateOut);
         $this->assertEquals('17:30:05', $timeOut, 'time must be 24-hour HH:mm:ss');
-        $this->assertEquals('SNTRY-XEGQNVH1', $logoutId);
+        // Logout ID must be the session's own logout_id, NOT its login_id.
+        $this->assertEquals('SNTRY-GWDWS8FA', $logoutId);
+        $this->assertNotEquals('SNTRY-XEGQNVH1', $logoutId, 'Login ID and Logout ID must be independently generated values');
         $this->assertStringStartsWith('http', $pictureUrl);
     }
 
-    public function test_login_id_prefix_is_not_doubled_if_already_present(): void
+    public function test_sentry_prefix_is_not_doubled_if_already_present(): void
     {
-        $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
-        $kiosk = KioskDevice::create(['farm_id' => $farm->farm_id, 'device_name' => 'K1', 'serial_number' => 'SN-' . uniqid()]);
-        $email = 'juan+' . uniqid() . '@example.com';
-        $directory = UserDirectory::create([
-            'identity_type_id' => $identityType->identity_type_id,
-            'person_reference' => $email,
-            'first_name' => 'Juan', 'last_name' => 'Dela Cruz', 'full_name' => 'Juan Dela Cruz',
-            'email' => $email, 'login_id' => 'SNTRY-ALREADY',
-        ]);
-        $visitorRequest = VisitorRequest::create([
-            'directory_id' => $directory->directory_id, 'visitor_id' => 'VIS-1', 'farm_id' => $farm->farm_id,
-            'host_name' => 'Host', 'visit_datetime' => now(), 'registration_token' => 'REG_' . Str::upper(Str::random(8)),
-            'approval_status' => 'Approved',
-        ]);
-        $session = VisitorSession::create([
-            'visitor_request_id' => $visitorRequest->visitor_request_id, 'session_status' => 'Inside', 'first_in' => now(),
-        ]);
-        $log = VisitorEntryLog::create([
-            'visitor_session_id' => $session->visitor_session_id, 'kiosk_id' => $kiosk->kiosk_id,
-            'movement_type' => 'First Entry', 'action' => 'IN', 'authentication_method' => 'FACE', 'datetime' => now(),
-        ]);
+        $log = $this->makeEntryLog(loginId: 'SNTRY-ALREADY', logoutId: 'SNTRY-ALSO-ALREADY');
 
         $mockClient = Mockery::mock(GoogleSheetsClient::class);
-        $capturedRow = null;
-        $mockClient->shouldReceive('appendRow')->once()->with(Mockery::any(), Mockery::any(), Mockery::on(function ($row) use (&$capturedRow) {
-            $capturedRow = $row;
+        $capturedTimeIn = null;
+        $capturedTimeOut = null;
+        $mockClient->shouldReceive('appendRow')->once()->with(Mockery::any(), 'Time In!A:G', Mockery::on(function ($row) use (&$capturedTimeIn) {
+            $capturedTimeIn = $row;
+            return true;
+        }));
+        $mockClient->shouldReceive('appendRow')->once()->with(Mockery::any(), 'Time Out!A:G', Mockery::on(function ($row) use (&$capturedTimeOut) {
+            $capturedTimeOut = $row;
             return true;
         }));
 
-        (new VisitorSheetWriter($mockClient))->appendTimeIn($log);
+        $writer = new VisitorSheetWriter($mockClient);
+        $writer->appendTimeIn($log);
+        $writer->appendTimeOut($log);
 
-        $this->assertEquals('SNTRY-ALREADY', $capturedRow[3]);
+        $this->assertEquals('SNTRY-ALREADY', $capturedTimeIn[3]);
+        $this->assertEquals('SNTRY-ALSO-ALREADY', $capturedTimeOut[3]);
     }
 }

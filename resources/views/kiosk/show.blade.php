@@ -249,6 +249,12 @@
         let lastAuthMethod = 'FACE';
         let faceFailStreak = 0;
         const MAX_FACE_FAIL_STREAK = 3;
+        // Which mode to return to once the current interaction finishes -
+        // set only at the moment a match succeeds, based on which path
+        // produced it. A QR-originated match must return to QR_SCAN, not
+        // silently fall back to face mode; only the explicit "Back to Face
+        // Recognition" button may do that.
+        let modeBeforeDetection = STATES.IDLE;
 
         function submitToken() {
             const token = document.getElementById('token-input').value.trim();
@@ -376,6 +382,7 @@
 
         function backToFaceRecognition() {
             currentState = STATES.IDLE;
+            modeBeforeDetection = STATES.IDLE;
             faceFailStreak = 0;
             updateStatus('Scan your face...', 'info');
             showActionButtons(null);
@@ -429,9 +436,9 @@
                     };
                     showActionButtons(currentVisitorRequest.session_state);
 
-                    // After action completes, reset to IDLE for next recognition
+                    // After action completes, return to scanning for the next visitor
                     setTimeout(() => {
-                        resetToIdle();
+                        finishInteraction();
                     }, 2000);
                 } else {
                     updateStatus(result.message, 'error');
@@ -447,15 +454,26 @@
             }
         }
 
-        function resetToIdle() {
-            currentState = STATES.IDLE;
+        // Ends the current recognized interaction and returns to whichever
+        // mode the visitor was actually using before they were detected -
+        // QR_SCAN stays QR_SCAN (e.g. a receptionist processing several QR
+        // visitors in a row), IDLE stays IDLE. Never force face mode.
+        function finishInteraction() {
             lastRecognizedDirectoryId = null;
             lastAuthMethod = 'FACE';
             currentVisitorRequest = null;
             noFaceStreak = 0;
             faceFailStreak = 0;
-            updateStatus('Scan your face...', 'info');
             showActionButtons(null);
+
+            if (modeBeforeDetection === STATES.QR_SCAN) {
+                currentState = STATES.QR_SCAN;
+                updateStatus('Scan your QR Code...', 'info');
+            } else {
+                currentState = STATES.IDLE;
+                updateStatus('Scan your face...', 'info');
+            }
+
             updateAuthToggle();
         }
 
@@ -495,7 +513,7 @@
                 if (!presence) {
                     noFaceStreak++;
                     if (noFaceStreak >= 2) {
-                        resetToIdle();
+                        finishInteraction();
                     }
                 } else {
                     noFaceStreak = 0;
@@ -592,6 +610,9 @@
 
             if (response.ok && result.success) {
                 currentState = STATES.DETECTED;
+                // Remember which mode this match came from so finishInteraction()
+                // returns here afterward instead of always defaulting to face mode.
+                modeBeforeDetection = (authMethod === 'QR') ? STATES.QR_SCAN : STATES.IDLE;
                 noFaceStreak = 0;
                 faceFailStreak = 0;
                 lastAuthMethod = authMethod;
@@ -606,7 +627,7 @@
             if (result.type === 'request_completed') {
                 updateStatus(result.message, 'error');
                 showActionButtons(null);
-                setTimeout(() => resetToIdle(), 3000);
+                setTimeout(() => finishInteraction(), 3000);
                 return;
             }
 

@@ -35,6 +35,7 @@ class KioskController extends Controller
 
     public function recognize(Request $request)
     {
+        $kiosk = $request->attributes->get('kiosk');
         $descriptor = $request->input('descriptor');
         $qrValue = $request->input('qr_value');
 
@@ -50,7 +51,8 @@ class KioskController extends Controller
 
             $directory = $match->directory;
             $visitorRequest = $this->pickBestActiveRequest(
-                VisitorRequest::where('directory_id', $directory->directory_id)->activeToday()
+                VisitorRequest::where('directory_id', $directory->directory_id)->activeToday(),
+                $kiosk->farm_id
             );
 
             if (!$visitorRequest) {
@@ -61,12 +63,13 @@ class KioskController extends Controller
                 ], 404);
             }
 
-            return $this->buildRecognitionResponse($visitorRequest, 'face_match', $directory);
+            return $this->buildRecognitionResponse($visitorRequest, 'face_match', $directory, $kiosk);
         }
 
         if ($qrValue) {
             $visitorRequest = $this->pickBestActiveRequest(
-                VisitorRequest::where('visitor_id', $qrValue)->activeToday()
+                VisitorRequest::where('visitor_id', $qrValue)->activeToday(),
+                $kiosk->farm_id
             );
 
             if (!$visitorRequest) {
@@ -81,7 +84,7 @@ class KioskController extends Controller
                 ], 404);
             }
 
-            return $this->buildRecognitionResponse($visitorRequest, 'qr_match', $visitorRequest->directory);
+            return $this->buildRecognitionResponse($visitorRequest, 'qr_match', $visitorRequest->directory, $kiosk);
         }
 
         return response()->json([
@@ -93,16 +96,25 @@ class KioskController extends Controller
     /**
      * A person (or a QR's visitor_id) can have more than one visitor_request
      * that falls within today's window - e.g. an older COMPLETED visit and a
-     * newer ACTIVE one for the same directory. Prefer a non-completed
-     * request (most recently created, if more than one), and only fall back
-     * to a completed one if that's genuinely the only match today - which
-     * still needs to surface the specific "already completed" message
-     * rather than a generic "not found".
+     * newer ACTIVE one, or requests for different farms.
+     *
+     * Priority: non-completed FIRST, then farm match, then most recent.
+     * Completed-status must outrank farm match - otherwise a stale
+     * COMPLETED request for the kiosk's own farm would be preferred over a
+     * genuinely ACTIVE request for a different farm, and the visitor would
+     * incorrectly see "already completed" instead of the correct "wrong
+     * farm" message (which the QR path - a direct visitor_id lookup with no
+     * candidate selection at all - always got right, exposing this bug).
+     * Only falls back to a farm-mismatched or completed request if that's
+     * genuinely the only match today - which still needs to surface the
+     * specific reason ("different farm" / "already completed") rather than
+     * a generic "not found".
      */
-    private function pickBestActiveRequest($query): ?VisitorRequest
+    private function pickBestActiveRequest($query, int $kioskFarmId): ?VisitorRequest
     {
         return $query
             ->orderByRaw("request_status = 'COMPLETED'")
+            ->orderByRaw('farm_id != ?', [$kioskFarmId])
             ->orderByDesc('visitor_request_id')
             ->first();
     }
@@ -112,8 +124,18 @@ class KioskController extends Controller
      * authentication paths - QR is strictly an alternate identification
      * method, never a shortcut around any check the face path enforces.
      */
-    private function buildRecognitionResponse(VisitorRequest $visitorRequest, string $matchType, $directory)
+    private function buildRecognitionResponse(VisitorRequest $visitorRequest, string $matchType, $directory, KioskDevice $kiosk)
     {
+        if ($visitorRequest->farm_id !== $kiosk->farm_id) {
+            $approvedFarmName = $visitorRequest->farm->farm_name ?? 'a different farm';
+
+            return response()->json([
+                'success' => false,
+                'type' => 'wrong_farm',
+                'message' => "Recognized successfully, but this visitor is approved for {$approvedFarmName}, not this location. Please proceed to the assigned farm kiosk.",
+            ], 403);
+        }
+
         $sessionState = $this->kioskService->resolveActiveRequest($visitorRequest->visitor_request_id);
 
         if ($sessionState && $sessionState['status'] === 'request_completed') {
