@@ -22,8 +22,11 @@ class VisitorSyncRequest extends FormRequest
             'farm' => 'required|string|max:255',
             'host_name' => 'required|string|max:255',
             'purpose' => 'nullable|string',
-            'visit_datetime' => 'required|date_format:Y-m-d H:i:s',
-            'departure_datetime' => 'nullable|date_format:Y-m-d H:i:s',
+            // AppSheet sends US-style dates (e.g. "8/6/2026 14:00:00" or
+            // "08/06/2026 14:00:00") - accept any recognizable date string
+            // rather than a single strict format, since padding varies.
+            'visit_datetime' => 'required|date',
+            'departure_datetime' => 'nullable|date',
             'visitor_id' => 'required|string|max:255',
             'qr_url' => 'required|url|max:500',
         ];

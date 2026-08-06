@@ -110,7 +110,34 @@ class VisitorSyncServiceTest extends TestCase
         $second = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'VIS-DUPE']));
 
         $this->assertEquals($first['registration_token'], $second['registration_token']);
-        $this->assertEquals(1, VisitorRequest::where('visitor_id', 'VIS-DUPE')->count());
+        $this->assertEquals(1, VisitorRequest::where('visitor_id', 'SNTRY-VIS-DUPE')->count());
+    }
+
+    public function test_visitor_id_is_prefixed_with_sntry(): void
+    {
+        $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => '08/06/2026-Louisa Reighn Alejo Santos-KLM012']));
+
+        $this->assertEquals('SNTRY-08/06/2026-Louisa Reighn Alejo Santos-KLM012', $result['visitor_request']->visitor_id);
+    }
+
+    public function test_visitor_id_prefix_is_not_doubled_if_already_present(): void
+    {
+        $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'SNTRY-ALREADY-PREFIXED']));
+
+        $this->assertEquals('SNTRY-ALREADY-PREFIXED', $result['visitor_request']->visitor_id);
+    }
+
+    public function test_appsheet_date_formats_are_parsed_correctly(): void
+    {
+        $result = $this->service->syncApprovedRequest($this->payload([
+            'visitor_id' => 'VIS-DATE1',
+            'visit_datetime' => '8/6/2026 14:00:00',
+            'departure_datetime' => '08/06/2026 17:00:00',
+        ]));
+
+        $this->assertTrue($result['success']);
+        $this->assertEquals('2026-08-06 14:00:00', $result['visitor_request']->visit_datetime->toDateTimeString());
+        $this->assertEquals('2026-08-06 17:00:00', $result['visitor_request']->departure_datetime->toDateTimeString());
     }
 
     public function test_unresolvable_farm_fails_without_creating_any_rows(): void

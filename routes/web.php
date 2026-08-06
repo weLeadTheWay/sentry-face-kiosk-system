@@ -23,6 +23,7 @@ Route::get('/register/visitor/qr', [\App\Http\Controllers\Visitor\RegistrationCo
 
 Route::get('/kiosk/{kiosk}', [\App\Http\Controllers\Kiosk\KioskController::class, 'show'])->name('kiosk.show');
 Route::middleware('kiosk.auth')->group(function () {
+    Route::get('/kiosk/{kiosk}/verify-token', [\App\Http\Controllers\Kiosk\KioskController::class, 'verifyToken'])->name('kiosk.verify-token');
     Route::post('/kiosk/{kiosk}/recognize', [\App\Http\Controllers\Kiosk\KioskController::class, 'recognize'])->name('kiosk.recognize');
     Route::post('/kiosk/{kiosk}/entry', [\App\Http\Controllers\Kiosk\KioskController::class, 'entry'])->name('kiosk.entry');
 });

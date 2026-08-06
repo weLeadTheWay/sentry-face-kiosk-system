@@ -86,4 +86,25 @@ class VisitorQrCodeTest extends TestCase
         $response->assertOk();
         $response->assertHeader('Content-Disposition', 'attachment; filename="visitor-qr-' . $visitorRequest->visitor_id . '.png"');
     }
+
+    public function test_qr_renders_and_downloads_with_realistic_sntry_visitor_id(): void
+    {
+        // Real-world shape: SNTRY- prefix, slashes and spaces from the
+        // date/name-composed visitor_id format.
+        $visitorRequest = $this->makeVisitorRequest([
+            'face_registration_status' => 'REGISTERED',
+            'visitor_id' => 'SNTRY-08/06/2026-Louisa Reighn Alejo Santos-KLM012',
+        ]);
+
+        $viewResponse = $this->get('/register/visitor/qr?token=' . $visitorRequest->registration_token);
+        $viewResponse->assertOk();
+        $viewResponse->assertHeader('Content-Type', 'image/png');
+
+        $downloadResponse = $this->get('/register/visitor/qr?token=' . $visitorRequest->registration_token . '&download=1');
+        $downloadResponse->assertOk();
+        // Slashes/spaces must not leak unescaped into the filename.
+        $disposition = $downloadResponse->headers->get('Content-Disposition');
+        $this->assertStringNotContainsString('/', $disposition);
+        $this->assertStringStartsWith('attachment; filename="visitor-qr-SNTRY-08_06_2026-Louisa', $disposition);
+    }
 }

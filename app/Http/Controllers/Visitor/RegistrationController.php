@@ -233,11 +233,25 @@ class RegistrationController extends Controller
             abort(404);
         }
 
-        $png = $qr->generate($visitorRequest->visitor_id);
+        try {
+            $png = $qr->generate($visitorRequest->visitor_id);
+        } catch (\Throwable $e) {
+            \Log::error('QR code generation failed', [
+                'token' => $token,
+                'visitor_request_id' => $visitorRequest->visitor_request_id,
+                'visitor_id' => $visitorRequest->visitor_id,
+                'exception' => get_class($e),
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
 
+            abort(500, 'Unable to generate QR code. This has been logged for investigation.');
+        }
+
+        $filename = preg_replace('/[^A-Za-z0-9._-]/', '_', $visitorRequest->visitor_id);
         $headers = ['Content-Type' => 'image/png'];
         if ($request->boolean('download')) {
-            $headers['Content-Disposition'] = 'attachment; filename="visitor-qr-' . $visitorRequest->visitor_id . '.png"';
+            $headers['Content-Disposition'] = 'attachment; filename="visitor-qr-' . $filename . '.png"';
         }
 
         return response($png, 200, $headers);

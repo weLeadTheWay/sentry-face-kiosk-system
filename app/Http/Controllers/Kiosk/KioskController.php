@@ -22,6 +22,17 @@ class KioskController extends Controller
         return view('kiosk.show', ['kiosk' => $kiosk]);
     }
 
+    /**
+     * Lightweight check the kiosk JS calls BEFORE showing the recognition
+     * UI or touching the webcam. Actual enforcement is the kiosk.auth
+     * middleware (401 on a missing/invalid token) - this action only runs
+     * at all once that middleware has already let the request through.
+     */
+    public function verifyToken()
+    {
+        return response()->json(['valid' => true]);
+    }
+
     public function recognize(Request $request)
     {
         $descriptor = $request->input('descriptor');

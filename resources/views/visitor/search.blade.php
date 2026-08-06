@@ -141,6 +141,7 @@
         video {
             width: 100%;
             display: block;
+            transform: scaleX(-1); /* mirror the preview so it feels like a normal front-facing camera */
         }
         .status {
             text-align: center;

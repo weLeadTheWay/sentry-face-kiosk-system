@@ -52,6 +52,7 @@
             width: 100%;
             height: 100%;
             display: block;
+            transform: scaleX(-1); /* mirror the preview so it feels like a normal front-facing camera */
         }
         .status-bar {
             background: rgba(255,255,255,0.95);
@@ -215,6 +216,14 @@
         </div>
     </div>
 
+    <div class="kiosk-container" id="unauthorized-view" style="display:none;">
+        <div class="setup-prompt">
+            <div class="setup-title" style="color: #dc3545;">⚠ Unauthorized Kiosk</div>
+            <p style="margin-bottom: 20px; color: #666;">This kiosk's token is missing or invalid. Face recognition cannot start until a valid token is entered.</p>
+            <button class="setup-btn" onclick="resetToken()">Enter a Different Token</button>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
@@ -252,15 +261,43 @@
             initialize();
         }
 
+        function showView(id) {
+            ['setup-view', 'main-view', 'unauthorized-view'].forEach(v => {
+                document.getElementById(v).style.display = (v === id) ? 'flex' : 'none';
+            });
+        }
+
+        function resetToken() {
+            localStorage.removeItem('kiosk_token_' + kioskId);
+            kioskToken = null;
+            showView('setup-view');
+        }
+
         async function initialize() {
             if (!kioskToken) {
-                document.getElementById('setup-view').style.display = 'flex';
-                document.getElementById('main-view').style.display = 'none';
+                showView('setup-view');
                 return;
             }
 
-            document.getElementById('setup-view').style.display = 'none';
-            document.getElementById('main-view').style.display = 'flex';
+            // Verify the token server-side BEFORE showing the recognition
+            // UI or touching the webcam - an invalid/missing token must
+            // never reach the camera-init step at all.
+            let tokenValid = false;
+            try {
+                const response = await fetch(`/kiosk/${kioskId}/verify-token`, {
+                    headers: { 'X-KIOSK-TOKEN': kioskToken },
+                });
+                tokenValid = response.ok;
+            } catch (err) {
+                tokenValid = false;
+            }
+
+            if (!tokenValid) {
+                showView('unauthorized-view');
+                return;
+            }
+
+            showView('main-view');
 
             try {
                 stream = await navigator.mediaDevices.getUserMedia({

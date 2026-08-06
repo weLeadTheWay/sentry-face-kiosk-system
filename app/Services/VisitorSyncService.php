@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\VisitorRequest;
 use App\Models\UserDirectory;
 use App\Models\IdentityType;
+use Carbon\Carbon;
 use Illuminate\Support\Str;
 
 class VisitorSyncService
@@ -23,8 +24,12 @@ class VisitorSyncService
             ];
         }
 
+        // Normalize BEFORE the idempotency lookup so a re-sync of the same
+        // AppSheet visitor_id always matches the already-prefixed stored
+        // value, rather than creating a duplicate row.
         $visitorIdKey = $data['visitor_id'] ?? null;
         if ($visitorIdKey) {
+            $visitorIdKey = $this->normalizeVisitorId($visitorIdKey);
             $existing = VisitorRequest::where('visitor_id', $visitorIdKey)->first();
             if ($existing) {
                 return [
@@ -49,13 +54,16 @@ class VisitorSyncService
         $registrationToken = 'REG_' . Str::upper(Str::random(8));
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
-            'visitor_id' => $data['visitor_id'] ?? null,
+            'visitor_id' => $visitorIdKey,
             'qr_url' => $data['qr_url'] ?? null,
             'farm_id' => $farm->farm_id,
             'host_name' => $data['host_name'],
             'purpose' => $data['purpose'] ?? null,
-            'visit_datetime' => $data['visit_datetime'],
-            'departure_datetime' => $data['departure_datetime'] ?? null,
+            // Explicitly parsed (not left to the model cast) so AppSheet's
+            // US-style "8/6/2026 14:00:00" / "08/06/2026 14:00:00" (both
+            // paddings) are always interpreted consistently.
+            'visit_datetime' => Carbon::parse($data['visit_datetime']),
+            'departure_datetime' => isset($data['departure_datetime']) ? Carbon::parse($data['departure_datetime']) : null,
             'registration_token' => $registrationToken,
             'approval_status' => 'Approved',
             'request_status' => 'ACTIVE',
@@ -101,6 +109,18 @@ class VisitorSyncService
             'email' => $email,
             'person_reference' => $email,
         ]);
+    }
+
+    /**
+     * Every generated Visitor ID must carry the SNTRY- prefix so it stays
+     * identifiable/filterable in Google Sheets and other external systems.
+     * Idempotent - a payload that already includes the prefix is left as-is.
+     */
+    private function normalizeVisitorId(string $rawVisitorId): string
+    {
+        $rawVisitorId = trim($rawVisitorId);
+
+        return Str::startsWith($rawVisitorId, 'SNTRY-') ? $rawVisitorId : 'SNTRY-' . $rawVisitorId;
     }
 
     private function buildFullName(array $data): string
