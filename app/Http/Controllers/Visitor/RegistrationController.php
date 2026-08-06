@@ -29,7 +29,30 @@ class RegistrationController extends Controller
             return view('visitor.register', ['error' => 'Invalid or expired registration token.']);
         }
 
-        return view('visitor.register', ['visitorRequest' => $visitorRequest, 'token' => $token]);
+        return view('visitor.register', [
+            'visitorRequest' => $visitorRequest,
+            'token' => $token,
+            'notice' => $request->query('notice'),
+        ]);
+    }
+
+    public function showSearch(Request $request)
+    {
+        $token = $request->query('token');
+
+        if (!$token) {
+            return view('visitor.search', ['error' => 'Missing registration token.']);
+        }
+
+        $visitorRequest = VisitorRequest::where('registration_token', $token)
+            ->where('approval_status', 'Approved')
+            ->first();
+
+        if (!$visitorRequest) {
+            return view('visitor.search', ['error' => 'Invalid or expired registration token.']);
+        }
+
+        return view('visitor.search', ['visitorRequest' => $visitorRequest, 'token' => $token]);
     }
 
     public function searchName(Request $request)
@@ -111,11 +134,13 @@ class RegistrationController extends Controller
         ]);
     }
 
-    public function confirmMatch(Request $request)
+    public function verifyFace(Request $request)
     {
         $token = $request->input('token');
-        $matchingDirectoryId = $request->input('directory_id');
-        $isConfirmed = $request->input('confirmed', false);
+        $directoryId = $request->input('directory_id');
+        $descriptor = $request->input('descriptor');
+        $faceImageBase64 = $request->input('face_image');
+        $attempt = (int) $request->input('attempt', 1);
 
         $visitorRequest = VisitorRequest::where('registration_token', $token)
             ->where('approval_status', 'Approved')
@@ -125,16 +150,54 @@ class RegistrationController extends Controller
             return response()->json(['success' => false, 'message' => 'Invalid token'], 400);
         }
 
-        if (!$isConfirmed) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Registration cancelled. Please contact administration.',
-            ]);
+        if (!$directoryId || !is_array($descriptor)) {
+            return response()->json(['success' => false, 'message' => 'Missing directory or descriptor'], 400);
         }
 
-        $this->registrationService->confirmFaceMatchOptionA($visitorRequest, $matchingDirectoryId, true);
+        $result = $this->registrationService->verifyFaceOptionB(
+            $visitorRequest,
+            (int) $directoryId,
+            $descriptor,
+            $faceImageBase64,
+            $attempt >= 3
+        );
 
-        return response()->json(['success' => true]);
+        if ($result['status'] === 'success') {
+            return response()->json(['success' => true, 'status' => 'success']);
+        }
+
+        if ($result['status'] === 'face_not_found') {
+            return response()->json(['success' => false, 'status' => 'face_not_found', 'message' => $result['message']], 422);
+        }
+
+        if ($result['status'] === 'verification_failed') {
+            return response()->json(['success' => true, 'status' => 'verification_failed', 'message' => $result['message']]);
+        }
+
+        return response()->json(['success' => false, 'status' => 'error', 'message' => $result['message'] ?? 'Verification failed'], 400);
+    }
+
+    public function confirmMatch(Request $request)
+    {
+        $token = $request->input('token');
+        $matchingDirectoryId = $request->input('directory_id');
+        $isConfirmed = $request->boolean('confirmed');
+
+        $visitorRequest = VisitorRequest::where('registration_token', $token)
+            ->where('approval_status', 'Approved')
+            ->first();
+
+        if (!$visitorRequest) {
+            return response()->json(['success' => false, 'message' => 'Invalid token'], 400);
+        }
+
+        $result = $this->registrationService->confirmFaceMatchOptionA($visitorRequest, (int) $matchingDirectoryId, $isConfirmed);
+
+        return response()->json([
+            'success' => true,
+            'status' => $result['status'],
+            'message' => $result['message'] ?? null,
+        ]);
     }
 
     public function success(Request $request)
@@ -151,6 +214,32 @@ class RegistrationController extends Controller
             return view('visitor.success', ['error' => 'Invalid token.']);
         }
 
-        return view('visitor.success', ['visitorRequest' => $visitorRequest]);
+        if ($visitorRequest->face_registration_status === 'PENDING') {
+            return redirect()->route('visitor.register', [
+                'token' => $token,
+                'notice' => 'Please complete your registration first.',
+            ]);
+        }
+
+        return view('visitor.success', ['visitorRequest' => $visitorRequest, 'token' => $token]);
+    }
+
+    public function qrCode(Request $request, \App\Services\Qr\VisitorQrCodeService $qr)
+    {
+        $token = $request->query('token');
+        $visitorRequest = VisitorRequest::where('registration_token', $token)->first();
+
+        if (!$visitorRequest || !$visitorRequest->visitor_id || $visitorRequest->face_registration_status === 'PENDING') {
+            abort(404);
+        }
+
+        $png = $qr->generate($visitorRequest->visitor_id);
+
+        $headers = ['Content-Type' => 'image/png'];
+        if ($request->boolean('download')) {
+            $headers['Content-Disposition'] = 'attachment; filename="visitor-qr-' . $visitorRequest->visitor_id . '.png"';
+        }
+
+        return response($png, 200, $headers);
     }
 }

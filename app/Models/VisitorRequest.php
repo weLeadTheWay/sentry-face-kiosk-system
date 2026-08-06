@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -28,6 +29,8 @@ class VisitorRequest extends Model
         'registration_token',
         'approval_status',
         'request_status',
+        'face_registration_status',
+        'manual_verification_required',
     ];
 
     protected function casts(): array
@@ -35,9 +38,37 @@ class VisitorRequest extends Model
         return [
             'visit_datetime' => 'datetime',
             'departure_datetime' => 'datetime',
+            'manual_verification_required' => 'boolean',
             'created_at' => 'datetime',
             'updated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * A visitor request is valid "today" if approved and today falls within
+     * [visit date, departure date] inclusive (departure date defaults to the
+     * visit date itself for single-day visits with no explicit departure).
+     */
+    public function scopeActiveToday(Builder $query, ?string $date = null): Builder
+    {
+        $date ??= now()->toDateString();
+
+        return $query->where('approval_status', 'Approved')
+            ->whereDate('visit_datetime', '<=', $date)
+            ->where(function (Builder $q) use ($date) {
+                $q->where(function (Builder $q2) use ($date) {
+                    $q2->whereNotNull('departure_datetime')
+                        ->whereDate('departure_datetime', '>=', $date);
+                })->orWhere(function (Builder $q2) use ($date) {
+                    $q2->whereNull('departure_datetime')
+                        ->whereDate('visit_datetime', $date);
+                });
+            });
+    }
+
+    public function isCompleted(): bool
+    {
+        return $this->request_status === 'COMPLETED';
     }
 
     public function directory(): BelongsTo

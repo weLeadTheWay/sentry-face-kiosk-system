@@ -44,7 +44,7 @@ class VisitorSheetWriter
                 'status_code' => 200,
                 'created_at' => now(),
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             \Log::error('Failed to append Time In row: ' . $e->getMessage());
             ApiLog::create([
                 'method' => 'POST',
@@ -89,7 +89,7 @@ class VisitorSheetWriter
                 'status_code' => 200,
                 'created_at' => now(),
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             \Log::error('Failed to append Time Out row: ' . $e->getMessage());
             ApiLog::create([
                 'method' => 'POST',

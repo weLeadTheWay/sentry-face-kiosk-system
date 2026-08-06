@@ -120,6 +120,25 @@
             margin-bottom: 20px;
             border: 1px solid #f5c6cb;
         }
+        .warning-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        .warning-title {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #856404;
+        }
+        .warning-box {
+            background: #fff3cd;
+            color: #856404;
+            padding: 20px;
+            border-radius: 4px;
+            margin-bottom: 30px;
+            border: 1px solid #ffeeba;
+            text-align: left;
+        }
     </style>
 </head>
 <body>
@@ -128,14 +147,22 @@
             @if(isset($error))
                 <div class="error">{{ $error }}</div>
             @elseif(isset($visitorRequest))
-                <div class="success-icon">✓</div>
-                <div class="title">Registration Complete!</div>
-                <div class="subtitle">You're ready to visit {{ $visitorRequest->farm->farm_name }}</div>
+                @if($visitorRequest->face_registration_status === 'FAILED_MATCH')
+                    <div class="warning-icon">⚠️</div>
+                    <div class="warning-title">Manual Verification Required</div>
+                    <div class="warning-box">
+                        A biometric conflict has been detected. Please contact the administrator. You may still use your assigned QR Code for entry.
+                    </div>
+                @else
+                    <div class="success-icon">✓</div>
+                    <div class="title">Registration Complete!</div>
+                    <div class="subtitle">You're ready to visit {{ $visitorRequest->farm->farm_name }}</div>
+                @endif
 
                 <div class="qr-container">
                     <div class="qr-label">Your Visitor QR Code</div>
                     <div class="qr-code">
-                        <img src="{{ $visitorRequest->qr_url }}" alt="Visitor QR Code">
+                        <img src="{{ route('visitor.qr', ['token' => $token]) }}" alt="Visitor QR Code">
                     </div>
                     <div class="visitor-id">ID: {{ $visitorRequest->visitor_id }}</div>
                     <button class="btn" style="margin-top: 10px; width: 100%;" onclick="downloadQR()">📥 Download QR Code</button>
@@ -169,8 +196,8 @@
     <script>
         function downloadQR() {
             const link = document.createElement('a');
-            link.href = '{{ $visitorRequest->qr_url ?? "#" }}';
-            link.download = 'visitor-qr-{{ $visitorRequest->visitor_id ?? "code" }}.jpg';
+            link.href = '{{ isset($visitorRequest) ? route("visitor.qr", ["token" => $token, "download" => 1]) : "#" }}';
+            link.download = 'visitor-qr-{{ $visitorRequest->visitor_id ?? "code" }}.png';
             link.click();
         }
     </script>

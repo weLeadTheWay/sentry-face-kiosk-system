@@ -129,6 +129,22 @@
             cursor: not-allowed;
             transform: none;
         }
+        .auth-toggle {
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .btn-link {
+            background: transparent;
+            color: white;
+            border: 2px solid rgba(255,255,255,0.6);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .btn-link:hover {
+            background: rgba(255,255,255,0.15);
+        }
         .setup-prompt {
             background: rgba(255,255,255,0.95);
             padding: 30px;
@@ -185,6 +201,8 @@
             <div class="status-message" id="status-message">Ready for face recognition...</div>
         </div>
 
+        <div class="auth-toggle" id="auth-toggle"></div>
+
         <div class="action-buttons" id="action-buttons"></div>
     </div>
 
@@ -198,6 +216,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
         let kioskToken = localStorage.getItem('kiosk_token_' + kioskId);
@@ -212,11 +231,15 @@
         // State machine for kiosk flow
         const STATES = {
             IDLE: 'IDLE',                    // Ready to recognize faces
-            DETECTED: 'DETECTED',            // Face matched, showing action buttons
+            DETECTED: 'DETECTED',            // Match found (face or QR), showing action buttons
             PROCESSING: 'PROCESSING',        // Processing an action (entry/exit)
+            QR_SCAN: 'QR_SCAN',              // Scanning a QR code instead of a face
         };
         let currentState = STATES.IDLE;
         let lastRecognizedDirectoryId = null;
+        let lastAuthMethod = 'FACE';
+        let faceFailStreak = 0;
+        const MAX_FACE_FAIL_STREAK = 3;
 
         function submitToken() {
             const token = document.getElementById('token-input').value.trim();
@@ -251,6 +274,7 @@
 
             await loadModels();
             updateStatus('Scan your face...', 'info');
+            updateAuthToggle();
             detectionTick();
         }
 
@@ -273,7 +297,13 @@
         function showActionButtons(state) {
             const buttonsHtml = [];
 
-            if (!state || state.status === 'no_session') {
+            // null/undefined means "no one is recognized yet" (idle, QR-scan
+            // mode, request_completed) - show nothing. Only an explicit
+            // 'no_session' status (a real match with no prior visit) shows
+            // Enter Farm.
+            if (!state) {
+                // no buttons
+            } else if (state.status === 'no_session') {
                 buttonsHtml.push('<button class="btn btn-primary" onclick="processAction(\'first_entry\')">✓ Enter Farm</button>');
             } else if (state.status === 'Inside') {
                 buttonsHtml.push('<button class="btn btn-warning" onclick="processAction(\'temporary_exit\')">🚪 Go Outside</button>');
@@ -284,6 +314,35 @@
             }
 
             document.getElementById('action-buttons').innerHTML = buttonsHtml.join('');
+        }
+
+        // The QR toggle is reachable manually at any time from IDLE, and
+        // automatically after 3 failed face attempts - both land here.
+        function updateAuthToggle() {
+            const el = document.getElementById('auth-toggle');
+            if (currentState === STATES.IDLE) {
+                el.innerHTML = '<button class="btn-link" onclick="enterQrScanMode()">📱 Scan QR Code Instead</button>';
+            } else if (currentState === STATES.QR_SCAN) {
+                el.innerHTML = '<button class="btn-link" onclick="backToFaceRecognition()">📷 Back to Face Recognition</button>';
+            } else {
+                el.innerHTML = '';
+            }
+        }
+
+        function enterQrScanMode() {
+            currentState = STATES.QR_SCAN;
+            faceFailStreak = 0;
+            updateStatus('Scan your QR Code...', 'info');
+            showActionButtons(null);
+            updateAuthToggle();
+        }
+
+        function backToFaceRecognition() {
+            currentState = STATES.IDLE;
+            faceFailStreak = 0;
+            updateStatus('Scan your face...', 'info');
+            showActionButtons(null);
+            updateAuthToggle();
         }
 
         async function processAction(action) {
@@ -316,6 +375,7 @@
                         visitor_request_id: currentVisitorRequest.visitor_request_id,
                         action: action,
                         photo: photoBase64,
+                        authentication_method: lastAuthMethod,
                     }),
                 });
 
@@ -353,10 +413,13 @@
         function resetToIdle() {
             currentState = STATES.IDLE;
             lastRecognizedDirectoryId = null;
+            lastAuthMethod = 'FACE';
             currentVisitorRequest = null;
             noFaceStreak = 0;
+            faceFailStreak = 0;
             updateStatus('Scan your face...', 'info');
             showActionButtons(null);
+            updateAuthToggle();
         }
 
         // Self-scheduling loop: never overlaps itself, always waits for the
@@ -377,6 +440,11 @@
 
             const video = document.getElementById('webcam');
             if (video.readyState < 2) {
+                return;
+            }
+
+            if (currentState === STATES.QR_SCAN) {
+                await runQrScanCycle(video);
                 return;
             }
 
@@ -430,28 +498,92 @@
                     }),
                 });
 
-                if (!response.ok) {
-                    return;
-                }
-
-                const result = await response.json();
-                if (result.success) {
-                    currentState = STATES.DETECTED;
-                    noFaceStreak = 0;
-                    lastRecognizedDirectoryId = result.directory.directory_id;
-                    currentVisitorRequest = result;
-                    updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
-                    showActionButtons(result.session_state);
-                } else {
-                    updateStatus('Face not recognized. Please register at the front desk.', 'error');
-                }
+                await handleRecognitionResponse(response, 'FACE');
             } catch (err) {
                 console.error('Recognition error:', err);
             }
         }
 
+        async function runQrScanCycle(video) {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code && code.data) {
+                await attemptQrRecognition(code.data);
+            }
+        }
+
+        async function attemptQrRecognition(qrValue) {
+            if (currentState !== STATES.QR_SCAN) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/kiosk/${kioskId}/recognize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                        'X-KIOSK-TOKEN': kioskToken,
+                    },
+                    body: JSON.stringify({
+                        qr_value: qrValue,
+                    }),
+                });
+
+                await handleRecognitionResponse(response, 'QR');
+            } catch (err) {
+                console.error('QR recognition error:', err);
+            }
+        }
+
+        // Shared by both authentication paths - identical handling of
+        // success, "already completed", and failure, so face and QR can
+        // never diverge in how a recognition result is applied client-side.
+        async function handleRecognitionResponse(response, authMethod) {
+            let result;
+            try {
+                result = await response.json();
+            } catch (err) {
+                return;
+            }
+
+            if (response.ok && result.success) {
+                currentState = STATES.DETECTED;
+                noFaceStreak = 0;
+                faceFailStreak = 0;
+                lastAuthMethod = authMethod;
+                lastRecognizedDirectoryId = result.directory.directory_id;
+                currentVisitorRequest = result;
+                updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
+                showActionButtons(result.session_state);
+                updateAuthToggle();
+                return;
+            }
+
+            if (result.type === 'request_completed') {
+                updateStatus(result.message, 'error');
+                showActionButtons(null);
+                setTimeout(() => resetToIdle(), 3000);
+                return;
+            }
+
+            updateStatus(result.message || 'Not recognized.', 'error');
+
+            if (authMethod === 'FACE') {
+                faceFailStreak++;
+                if (faceFailStreak >= MAX_FACE_FAIL_STREAK) {
+                    enterQrScanMode();
+                }
+            }
+        }
+
         initialize();
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </body>
 </html>

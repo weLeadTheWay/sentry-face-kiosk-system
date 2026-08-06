@@ -5,7 +5,6 @@ namespace App\Services\GoogleSheets;
 use Google\Client;
 use Google\Service\Sheets;
 use Google\Service\Sheets\ValueRange;
-use Illuminate\Support\Facades\Retry;
 
 class GoogleSheetsClient
 {
@@ -30,7 +29,7 @@ class GoogleSheetsClient
             'values' => [$values],
         ]);
 
-        Retry::retry(3, function () use ($spreadsheetId, $range, $valueRange) {
+        retry(3, function () use ($spreadsheetId, $range, $valueRange) {
             $this->sheetsService->spreadsheets_values->append(
                 $spreadsheetId,
                 $range,

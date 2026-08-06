@@ -22,13 +22,16 @@ class VisitorKioskService
             return null;
         }
 
-        $now = now();
-        if ($visitorRequest->visit_datetime > $now) {
-            return null;
-        }
-
-        if ($visitorRequest->departure_datetime && $visitorRequest->departure_datetime < $now) {
-            return null;
+        // Completed requests are checked FIRST, before the session lookup -
+        // this is what makes a finished visit distinguishable from a
+        // brand-new one (a Completed session is otherwise excluded from the
+        // whereIn() below and would look identical to "never visited").
+        if ($visitorRequest->isCompleted()) {
+            return [
+                'status' => 'request_completed',
+                'visitor_request_id' => $visitorRequestId,
+                'directory' => $visitorRequest->directory,
+            ];
         }
 
         $activeSession = VisitorSession::where('visitor_request_id', $visitorRequestId)
@@ -57,12 +60,17 @@ class VisitorKioskService
         int $visitorRequestId,
         string $action,
         KioskDevice $kiosk,
-        ?string $photoBase64 = null
+        ?string $photoBase64 = null,
+        string $authenticationMethod = 'FACE'
     ): array {
         $visitorRequest = VisitorRequest::find($visitorRequestId);
 
         if (!$visitorRequest) {
             return ['success' => false, 'message' => 'Visitor request not found'];
+        }
+
+        if ($visitorRequest->isCompleted()) {
+            return ['success' => false, 'message' => 'This visit has already been completed. A new approved request is required.'];
         }
 
         $activeSession = VisitorSession::where('visitor_request_id', $visitorRequestId)
@@ -86,6 +94,7 @@ class VisitorKioskService
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'First Entry',
                 'action' => 'IN',
+                'authentication_method' => $authenticationMethod,
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
@@ -93,7 +102,7 @@ class VisitorKioskService
             if ($this->sheetWriter) {
                 try {
                     $this->sheetWriter->appendTimeIn($entryLog);
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     \Log::error('Google Sheets Time In write failed: ' . $e->getMessage());
                 }
             }
@@ -121,6 +130,7 @@ class VisitorKioskService
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'Temporary Exit',
                 'action' => 'OUT',
+                'authentication_method' => $authenticationMethod,
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
@@ -144,6 +154,7 @@ class VisitorKioskService
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'Return',
                 'action' => 'IN',
+                'authentication_method' => $authenticationMethod,
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
@@ -166,11 +177,14 @@ class VisitorKioskService
                 'completed_at' => now(),
             ]);
 
+            $visitorRequest->update(['request_status' => 'COMPLETED']);
+
             $exitLog = VisitorEntryLog::create([
                 'visitor_session_id' => $activeSession->visitor_session_id,
                 'kiosk_id' => $kiosk->kiosk_id,
                 'movement_type' => 'Final Exit',
                 'action' => 'OUT',
+                'authentication_method' => $authenticationMethod,
                 'photo' => $photoPath,
                 'datetime' => now(),
             ]);
@@ -178,7 +192,7 @@ class VisitorKioskService
             if ($this->sheetWriter) {
                 try {
                     $this->sheetWriter->appendTimeOut($exitLog);
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     \Log::error('Google Sheets Time Out write failed: ' . $e->getMessage());
                 }
             }

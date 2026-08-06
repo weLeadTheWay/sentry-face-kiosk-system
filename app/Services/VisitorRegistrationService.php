@@ -21,7 +21,21 @@ class VisitorRegistrationService
     ): array {
         $existingMatch = $this->faceMatchingService->findMatch($descriptor);
 
-        if ($existingMatch && $existingMatch->directory_id !== $visitorRequest->directory_id) {
+        if ($existingMatch && $existingMatch->directory_id === $visitorRequest->directory_id) {
+            // Same person, already registered - do not create a duplicate face_profile.
+            if ($visitorRequest->face_registration_status !== 'REGISTERED') {
+                $visitorRequest->update(['face_registration_status' => 'REGISTERED']);
+            }
+
+            return [
+                'status' => 'already_registered',
+                'message' => 'Your face is already registered.',
+                'face_profile_id' => $existingMatch->face_profile_id,
+                'directory_id' => $existingMatch->directory_id,
+            ];
+        }
+
+        if ($existingMatch) {
             return [
                 'status' => 'face_found_different_directory',
                 'face_profile_id' => $existingMatch->face_profile_id,
@@ -45,6 +59,8 @@ class VisitorRegistrationService
             'is_active' => true,
         ]);
 
+        $visitorRequest->update(['face_registration_status' => 'REGISTERED']);
+
         return [
             'status' => 'success',
             'face_profile_id' => $faceProfile->face_profile_id,
@@ -56,17 +72,20 @@ class VisitorRegistrationService
         VisitorRequest $visitorRequest,
         int $matchingDirectoryId,
         bool $isConfirmed
-    ): ?array {
-        if (!$isConfirmed) {
-            return null;
+    ): array {
+        if ($isConfirmed) {
+            $visitorRequest->update([
+                'directory_id' => $matchingDirectoryId,
+                'face_registration_status' => 'REGISTERED',
+            ]);
+
+            return [
+                'status' => 'linked',
+                'directory_id' => $matchingDirectoryId,
+            ];
         }
 
-        $visitorRequest->update(['directory_id' => $matchingDirectoryId]);
-
-        return [
-            'status' => 'success',
-            'directory_id' => $matchingDirectoryId,
-        ];
+        return $this->markManualVerificationRequired($visitorRequest, 'failed_match');
     }
 
     public function searchByName(string $query, int $limit = 10): array
@@ -82,7 +101,8 @@ class VisitorRegistrationService
         VisitorRequest $visitorRequest,
         int $selectedDirectoryId,
         array $descriptor,
-        ?string $faceImageBase64 = null
+        ?string $faceImageBase64 = null,
+        bool $isFinalAttempt = false
     ): array {
         $directory = UserDirectory::find($selectedDirectoryId);
         if (!$directory) {
@@ -92,18 +112,45 @@ class VisitorRegistrationService
         $match = $this->faceMatchingService->findMatch($descriptor, $selectedDirectoryId);
 
         if (!$match) {
+            if ($isFinalAttempt) {
+                return $this->markManualVerificationRequired($visitorRequest, 'verification_failed');
+            }
+
             return [
                 'status' => 'face_not_found',
                 'message' => 'Face does not match this directory. Please try again.',
             ];
         }
 
-        $visitorRequest->update(['directory_id' => $selectedDirectoryId]);
+        $visitorRequest->update([
+            'directory_id' => $selectedDirectoryId,
+            'face_registration_status' => 'REGISTERED',
+        ]);
 
         return [
             'status' => 'success',
             'directory_id' => $selectedDirectoryId,
             'face_profile_id' => $match->face_profile_id,
+        ];
+    }
+
+    /**
+     * Shared terminal-failure path for both Option A's "No, this is not me"
+     * decline and Option B's 3rd failed verification attempt: no face
+     * profile is created/linked, the request is flagged for an
+     * administrator to resolve, and the visitor can still use their QR
+     * code for entry (per the biometric-conflict business rule).
+     */
+    private function markManualVerificationRequired(VisitorRequest $visitorRequest, string $status): array
+    {
+        $visitorRequest->update([
+            'face_registration_status' => 'FAILED_MATCH',
+            'manual_verification_required' => true,
+        ]);
+
+        return [
+            'status' => $status,
+            'message' => 'A biometric conflict has been detected. Please contact the administrator. You may still use your assigned QR Code for entry.',
         ];
     }
 

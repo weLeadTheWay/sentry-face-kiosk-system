@@ -44,16 +44,7 @@ class VisitorSyncService
             ];
         }
 
-        $directory = UserDirectory::firstOrCreate(
-            ['email' => $data['email']],
-            [
-                'identity_type_id' => $visitorIdentityType->identity_type_id,
-                'first_name' => $data['first_name'] ?? 'Unknown',
-                'last_name' => $data['last_name'] ?? 'Visitor',
-                'full_name' => $data['full_name'] ?? ($data['first_name'] ?? 'Unknown') . ' ' . ($data['last_name'] ?? 'Visitor'),
-                'person_reference' => $data['email'],
-            ]
-        );
+        $directory = $this->resolveDirectory($data, $visitorIdentityType->identity_type_id);
 
         $registrationToken = 'REG_' . Str::upper(Str::random(8));
         $visitorRequest = VisitorRequest::create([
@@ -76,5 +67,54 @@ class VisitorSyncService
             'registration_token' => $registrationToken,
             'visitor_request' => $visitorRequest,
         ];
+    }
+
+    /**
+     * Resolve the UserDirectory for this sync payload.
+     *
+     * A directory is only reused when BOTH full_name and email match an
+     * existing record (case-insensitive, trimmed). Any other combination
+     * (same email/different name, same name/different email, both differ)
+     * always creates a new directory - identity must never be merged on a
+     * single field alone. Face Registration later resolves true duplicates
+     * via the face-match confirmation workflow.
+     */
+    private function resolveDirectory(array $data, int $identityTypeId): UserDirectory
+    {
+        $fullName = $this->buildFullName($data);
+        $email = trim($data['email']);
+
+        $existing = UserDirectory::whereRaw('LOWER(TRIM(email)) = ?', [Str::lower($email)])
+            ->whereRaw('LOWER(TRIM(full_name)) = ?', [Str::lower($fullName)])
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return UserDirectory::create([
+            'identity_type_id' => $identityTypeId,
+            'first_name' => $data['first_name'] ?? 'Unknown',
+            'middle_name' => $data['middle_name'] ?? null,
+            'last_name' => $data['last_name'] ?? 'Visitor',
+            'full_name' => $fullName,
+            'email' => $email,
+            'person_reference' => $email,
+        ]);
+    }
+
+    private function buildFullName(array $data): string
+    {
+        $parts = array_filter([
+            trim($data['first_name'] ?? ''),
+            trim($data['middle_name'] ?? ''),
+            trim($data['last_name'] ?? ''),
+        ], fn ($part) => $part !== '');
+
+        if (empty($parts) && !empty($data['full_name'])) {
+            return trim($data['full_name']);
+        }
+
+        return implode(' ', $parts) ?: 'Unknown Visitor';
     }
 }

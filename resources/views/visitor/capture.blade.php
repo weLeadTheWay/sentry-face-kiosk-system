@@ -112,8 +112,8 @@
                 <video id="webcam" autoplay playsinline></video>
             </div>
 
-            <div class="controls">
-                <button class="btn" onclick="captureFrame()">📸 Capture Face</button>
+            <div class="controls" id="capture-controls">
+                <button class="btn" id="capture-btn" onclick="captureFrame()">📸 Capture Face</button>
                 <button class="btn btn-secondary" onclick="window.history.back()">Cancel</button>
             </div>
 
@@ -143,12 +143,12 @@
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script>
         const token = new URL(window.location).searchParams.get('token');
-        const option = new URL(window.location).searchParams.get('option') || 'A';
         let stream = null;
         let lastDirectoryId = null;
         let modelsLoaded = false;
 
         const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+        const MIN_FACE_CONFIDENCE = 0.7;
 
         async function loadModels() {
             document.getElementById('status').textContent = 'Loading face recognition models...';
@@ -180,13 +180,25 @@
             const video = document.getElementById('webcam');
             document.getElementById('status').textContent = 'Detecting face...';
 
-            const detection = await faceapi
-                .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+            const detections = await faceapi
+                .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
                 .withFaceLandmarks()
-                .withFaceDescriptor();
+                .withFaceDescriptors();
 
-            if (!detection) {
+            if (detections.length === 0) {
                 document.getElementById('status').textContent = 'No face detected. Please center your face in the camera and try again.';
+                return;
+            }
+
+            if (detections.length > 1) {
+                document.getElementById('status').textContent = 'Please ensure only one face is visible.';
+                return;
+            }
+
+            const detection = detections[0];
+
+            if (detection.detection.score < MIN_FACE_CONFIDENCE) {
+                document.getElementById('status').textContent = 'Face not clear, please try again in better lighting.';
                 return;
             }
 
@@ -196,7 +208,12 @@
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0);
             const imageData = canvas.toDataURL('image/jpeg');
+            const descriptorArray = Array.from(detection.descriptor);
 
+            registerFace(descriptorArray, imageData);
+        }
+
+        function registerFace(descriptorArray, imageData) {
             document.getElementById('loading').style.display = 'block';
             document.getElementById('status').textContent = 'Processing...';
 
@@ -208,7 +225,7 @@
                 },
                 body: JSON.stringify({
                     token: token,
-                    descriptor: Array.from(detection.descriptor),
+                    descriptor: descriptorArray,
                     face_image: imageData,
                 }),
             })
@@ -216,13 +233,22 @@
             .then(data => {
                 document.getElementById('loading').style.display = 'none';
 
-                // NEW: Handle face found in different directory
                 if (data.status === 'face_found_different_directory') {
                     lastDirectoryId = data.directory_id;
-                    document.querySelector('.controls').style.display = 'none';
+                    document.getElementById('capture-controls').style.display = 'none';
                     document.getElementById('face-match-prompt').style.display = 'block';
                     document.getElementById('matched-name').textContent = data.matched_name || 'Unknown Person';
                     document.getElementById('status').textContent = 'Found existing face...';
+                    return;
+                }
+
+                if (data.status === 'already_registered') {
+                    document.getElementById('status').textContent = "You're already registered! Redirecting...";
+                    document.getElementById('status').style.color = '#28a745';
+                    document.getElementById('status').style.fontWeight = '600';
+                    setTimeout(() => {
+                        window.location.href = '/register/visitor/success?token=' + token;
+                    }, 1500);
                     return;
                 }
 
@@ -238,7 +264,9 @@
             });
         }
 
-        // NEW: Handle user confirming or denying face match
+        // Both "Yes, It's Me" and "No, Different Person" always proceed to the
+        // success page - success.blade.php renders the correct framing
+        // (registered vs. biometric-conflict) based on face_registration_status.
         function confirmFaceMatch(isConfirmed) {
             document.getElementById('loading').style.display = 'block';
             document.getElementById('face-match-prompt').style.display = 'none';

@@ -15,6 +15,7 @@ class VisitorSyncRequest extends FormRequest
     {
         return [
             'first_name' => 'nullable|string|max:100',
+            'middle_name' => 'nullable|string|max:100',
             'last_name' => 'nullable|string|max:100',
             'full_name' => 'nullable|string|max:255',
             'email' => 'required|email|max:255',

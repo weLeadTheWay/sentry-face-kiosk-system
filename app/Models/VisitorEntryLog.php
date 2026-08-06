@@ -21,6 +21,7 @@ class VisitorEntryLog extends Model
         'kiosk_id',
         'movement_type',
         'action',
+        'authentication_method',
         'remarks',
         'photo',
         'datetime',

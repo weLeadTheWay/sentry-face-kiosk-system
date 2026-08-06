@@ -12,11 +12,14 @@ Route::post('/login', [LoginController::class, 'store'])->name('login.store');
 Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
 Route::get('/register/visitor', [\App\Http\Controllers\Visitor\RegistrationController::class, 'show'])->name('visitor.register');
-Route::get('/register/visitor/search', [\App\Http\Controllers\Visitor\RegistrationController::class, 'searchName'])->name('visitor.search');
+Route::get('/register/visitor/search', [\App\Http\Controllers\Visitor\RegistrationController::class, 'showSearch'])->name('visitor.search');
+Route::get('/register/visitor/search/query', [\App\Http\Controllers\Visitor\RegistrationController::class, 'searchName'])->name('visitor.search.query');
 Route::get('/register/visitor/capture', [\App\Http\Controllers\Visitor\RegistrationController::class, 'showCapture'])->name('visitor.capture.show');
 Route::post('/register/visitor/capture', [\App\Http\Controllers\Visitor\RegistrationController::class, 'captureFace'])->name('visitor.capture');
+Route::post('/register/visitor/verify', [\App\Http\Controllers\Visitor\RegistrationController::class, 'verifyFace'])->name('visitor.verify');
 Route::post('/register/visitor/confirm', [\App\Http\Controllers\Visitor\RegistrationController::class, 'confirmMatch'])->name('visitor.confirm');
 Route::get('/register/visitor/success', [\App\Http\Controllers\Visitor\RegistrationController::class, 'success'])->name('visitor.success');
+Route::get('/register/visitor/qr', [\App\Http\Controllers\Visitor\RegistrationController::class, 'qrCode'])->name('visitor.qr');
 
 Route::get('/kiosk/{kiosk}', [\App\Http\Controllers\Kiosk\KioskController::class, 'show'])->name('kiosk.show');
 Route::middleware('kiosk.auth')->group(function () {

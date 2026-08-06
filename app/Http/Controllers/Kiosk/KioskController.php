@@ -29,54 +29,48 @@ class KioskController extends Controller
 
         if ($descriptor) {
             $match = $this->faceMatchingService->findMatch($descriptor);
-            if ($match) {
-                $directory = $match->directory;
-                $visitorRequest = VisitorRequest::where('directory_id', $directory->directory_id)
-                    ->where('approval_status', 'Approved')
-                    ->whereDate('visit_datetime', today())
-                    ->first();
-
-                if ($visitorRequest) {
-                    $sessionState = $this->kioskService->resolveActiveRequest($visitorRequest->visitor_request_id);
-                    return response()->json([
-                        'success' => true,
-                        'type' => 'face_match',
-                        'visitor_request_id' => $visitorRequest->visitor_request_id,
-                        'session_state' => $sessionState,
-                        'directory' => $directory,
-                    ]);
-                }
+            if (!$match) {
+                return response()->json([
+                    'success' => false,
+                    'type' => 'face_not_found',
+                    'message' => 'Face not recognized. Try scanning QR code.',
+                ], 404);
             }
 
-            return response()->json([
-                'success' => false,
-                'type' => 'face_not_found',
-                'message' => 'Face not recognized. Try scanning QR code.',
-            ], 404);
+            $directory = $match->directory;
+            $visitorRequest = $this->pickBestActiveRequest(
+                VisitorRequest::where('directory_id', $directory->directory_id)->activeToday()
+            );
+
+            if (!$visitorRequest) {
+                return response()->json([
+                    'success' => false,
+                    'type' => 'face_found_no_active_request',
+                    'message' => 'Face recognized. No approved visitor request found for today.',
+                ], 404);
+            }
+
+            return $this->buildRecognitionResponse($visitorRequest, 'face_match', $directory);
         }
 
         if ($qrValue) {
-            $visitorRequest = VisitorRequest::where('visitor_id', $qrValue)
-                ->where('approval_status', 'Approved')
-                ->whereDate('visit_datetime', today())
-                ->first();
+            $visitorRequest = $this->pickBestActiveRequest(
+                VisitorRequest::where('visitor_id', $qrValue)->activeToday()
+            );
 
-            if ($visitorRequest) {
-                $sessionState = $this->kioskService->resolveActiveRequest($visitorRequest->visitor_request_id);
+            if (!$visitorRequest) {
+                $exists = VisitorRequest::where('visitor_id', $qrValue)->exists();
+
                 return response()->json([
-                    'success' => true,
-                    'type' => 'qr_match',
-                    'visitor_request_id' => $visitorRequest->visitor_request_id,
-                    'session_state' => $sessionState,
-                    'directory' => $visitorRequest->directory,
-                ]);
+                    'success' => false,
+                    'type' => $exists ? 'qr_found_no_active_request' : 'qr_not_found',
+                    'message' => $exists
+                        ? 'QR code recognized. No approved visitor request found for today.'
+                        : 'QR code not recognized.',
+                ], 404);
             }
 
-            return response()->json([
-                'success' => false,
-                'type' => 'qr_not_found',
-                'message' => 'QR code not recognized.',
-            ], 404);
+            return $this->buildRecognitionResponse($visitorRequest, 'qr_match', $visitorRequest->directory);
         }
 
         return response()->json([
@@ -85,12 +79,59 @@ class KioskController extends Controller
         ], 400);
     }
 
+    /**
+     * A person (or a QR's visitor_id) can have more than one visitor_request
+     * that falls within today's window - e.g. an older COMPLETED visit and a
+     * newer ACTIVE one for the same directory. Prefer a non-completed
+     * request (most recently created, if more than one), and only fall back
+     * to a completed one if that's genuinely the only match today - which
+     * still needs to surface the specific "already completed" message
+     * rather than a generic "not found".
+     */
+    private function pickBestActiveRequest($query): ?VisitorRequest
+    {
+        return $query
+            ->orderByRaw("request_status = 'COMPLETED'")
+            ->orderByDesc('visitor_request_id')
+            ->first();
+    }
+
+    /**
+     * Identical validation/response shape for both the face and QR
+     * authentication paths - QR is strictly an alternate identification
+     * method, never a shortcut around any check the face path enforces.
+     */
+    private function buildRecognitionResponse(VisitorRequest $visitorRequest, string $matchType, $directory)
+    {
+        $sessionState = $this->kioskService->resolveActiveRequest($visitorRequest->visitor_request_id);
+
+        if ($sessionState && $sessionState['status'] === 'request_completed') {
+            return response()->json([
+                'success' => false,
+                'type' => 'request_completed',
+                'message' => 'This visit has already been completed. A new approved request is required.',
+                'visitor_request_id' => $visitorRequest->visitor_request_id,
+            ], 409);
+        }
+
+        return response()->json([
+            'success' => true,
+            'type' => $matchType,
+            'visitor_request_id' => $visitorRequest->visitor_request_id,
+            'session_state' => $sessionState,
+            'directory' => $directory,
+        ]);
+    }
+
     public function entry(Request $request)
     {
         $kiosk = $request->attributes->get('kiosk');
         $visitorRequestId = $request->input('visitor_request_id');
         $action = $request->input('action');
         $photoBase64 = $request->input('photo');
+        $authenticationMethod = in_array($request->input('authentication_method'), ['FACE', 'QR'], true)
+            ? $request->input('authentication_method')
+            : 'FACE';
 
         if (!$visitorRequestId || !$action) {
             return response()->json([
@@ -106,7 +147,7 @@ class KioskController extends Controller
             ], 401);
         }
 
-        $result = $this->kioskService->processEntry($visitorRequestId, $action, $kiosk, $photoBase64);
+        $result = $this->kioskService->processEntry($visitorRequestId, $action, $kiosk, $photoBase64, $authenticationMethod);
 
         return response()->json($result, $result['success'] ? 200 : 400);
     }

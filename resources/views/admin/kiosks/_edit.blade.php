@@ -41,4 +41,28 @@
             <a href="{{ route('kiosks.index') }}" class="btn btn-secondary ajax-link">Cancel</a>
         </div>
     </form>
+
+    <div style="padding: 1.5rem; border-top: 1px solid #eee;">
+        <div class="form-group">
+            <label for="kiosk_token">Kiosk Token</label>
+            <div style="display: flex; gap: 0.5rem;">
+                <input type="text" id="kiosk_token" value="{{ $kiosk_device->kiosk_token }}" readonly style="flex: 1; background: #f8f9fa;">
+                <button type="button" class="btn btn-secondary" onclick="copyKioskToken()">Copy</button>
+            </div>
+            <p style="font-size: 12px; color: #666; margin-top: 6px;">Enter this token on the physical kiosk's setup screen to pair it with this device.</p>
+        </div>
+
+        <form method="POST" action="{{ route('kiosks.regenerate-token', $kiosk_device) }}" class="ajax-form" onsubmit="return confirm('Regenerating will invalidate the token currently stored on the physical kiosk. Continue?');">
+            @csrf
+            <button type="submit" class="btn btn-danger">Regenerate Token</button>
+        </form>
+    </div>
 </div>
+
+<script>
+    function copyKioskToken() {
+        const input = document.getElementById('kiosk_token');
+        input.select();
+        navigator.clipboard.writeText(input.value);
+    }
+</script>
