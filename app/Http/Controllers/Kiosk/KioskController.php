@@ -138,10 +138,17 @@ class KioskController extends Controller
 
         $sessionState = $this->kioskService->resolveActiveRequest($visitorRequest->visitor_request_id);
 
-        if ($sessionState && $sessionState['status'] === 'request_completed') {
+        // isCompleted() is the single source of truth for "terminal" - covers
+        // COMPLETED (manual Final Exit), COMPLETED_AUTO and INCOMPLETE (both
+        // auto-resolved by the expired-session scheduler). The kiosk keeps
+        // showing one generic message/type for all three (no frontend
+        // change needed), but the real value is exposed via request_status
+        // for API accuracy / future use.
+        if ($visitorRequest->isCompleted()) {
             return response()->json([
                 'success' => false,
                 'type' => 'request_completed',
+                'request_status' => $sessionState['status'] ?? $visitorRequest->request_status,
                 'message' => 'This visit has already been completed. A new approved request is required.',
                 'visitor_request_id' => $visitorRequest->visitor_request_id,
             ], 409);

@@ -26,9 +26,13 @@ class VisitorKioskService
         // this is what makes a finished visit distinguishable from a
         // brand-new one (a Completed session is otherwise excluded from the
         // whereIn() below and would look identical to "never visited").
+        // The real request_status (COMPLETED / COMPLETED_AUTO / INCOMPLETE)
+        // is returned as-is rather than a synthesized generic string, so
+        // callers get accurate data even though the kiosk currently shows
+        // the same message for all three.
         if ($visitorRequest->isCompleted()) {
             return [
-                'status' => 'request_completed',
+                'status' => $visitorRequest->request_status,
                 'visitor_request_id' => $visitorRequestId,
                 'directory' => $visitorRequest->directory,
             ];

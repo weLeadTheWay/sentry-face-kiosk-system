@@ -66,9 +66,18 @@ class VisitorRequest extends Model
             });
     }
 
+    private const TERMINAL_STATUSES = ['COMPLETED', 'COMPLETED_AUTO', 'INCOMPLETE'];
+
+    /**
+     * Any of these means the request is closed and must never be reused:
+     * COMPLETED (manual Final Exit), COMPLETED_AUTO / INCOMPLETE (auto-resolved
+     * by the expired-session scheduler). Callers that only care about "is this
+     * blocked from further action" should use this rather than comparing
+     * request_status to a single literal value.
+     */
     public function isCompleted(): bool
     {
-        return $this->request_status === 'COMPLETED';
+        return in_array($this->request_status, self::TERMINAL_STATUSES, true);
     }
 
     public function directory(): BelongsTo
