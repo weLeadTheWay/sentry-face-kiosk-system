@@ -24,12 +24,12 @@ class VisitorSyncService
             ];
         }
 
-        // Normalize BEFORE the idempotency lookup so a re-sync of the same
-        // AppSheet visitor_id always matches the already-prefixed stored
-        // value, rather than creating a duplicate row.
+        // Stored EXACTLY as received from AppSheet - visitor_id must never
+        // be modified (no prefixing, no normalization). Only Login ID /
+        // Logout ID (generated separately, per visitor_session) carry the
+        // SNTRY- prefix - see VisitorSheetWriter::formatSentryId().
         $visitorIdKey = $data['visitor_id'] ?? null;
         if ($visitorIdKey) {
-            $visitorIdKey = $this->normalizeVisitorId($visitorIdKey);
             $existing = VisitorRequest::where('visitor_id', $visitorIdKey)->first();
             if ($existing) {
                 return [
@@ -109,18 +109,6 @@ class VisitorSyncService
             'email' => $email,
             'person_reference' => $email,
         ]);
-    }
-
-    /**
-     * Every generated Visitor ID must carry the SNTRY- prefix so it stays
-     * identifiable/filterable in Google Sheets and other external systems.
-     * Idempotent - a payload that already includes the prefix is left as-is.
-     */
-    private function normalizeVisitorId(string $rawVisitorId): string
-    {
-        $rawVisitorId = trim($rawVisitorId);
-
-        return Str::startsWith($rawVisitorId, 'SNTRY-') ? $rawVisitorId : 'SNTRY-' . $rawVisitorId;
     }
 
     private function buildFullName(array $data): string

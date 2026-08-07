@@ -34,7 +34,7 @@ class VisitorSheetWriterTest extends TestCase
         ]);
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
-            'visitor_id' => 'SNTRY-08/06/2026-Louisa Reighn Alejo Santos-KLM012',
+            'visitor_id' => '08/06/2026-Louisa Reighn Alejo Santos-KLM012',
             'farm_id' => $farm->farm_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
@@ -80,8 +80,8 @@ class VisitorSheetWriterTest extends TestCase
         $this->assertEquals('8/06/2026', $dateIn, 'date must be M/DD/YYYY, month not zero-padded');
         $this->assertEquals('14:15:46', $timeIn, 'time must be 24-hour HH:mm:ss');
         $this->assertEquals('Louisa Reighn Alejo Santos', $name);
-        $this->assertEquals('SNTRY-XEGQNVH1', $loginId);
-        $this->assertEquals('SNTRY-08/06/2026-Louisa Reighn Alejo Santos-KLM012', $visitorId);
+        $this->assertEquals('SNTRY-XEGQNVH1', $loginId, 'Login ID gets the SNTRY- prefix');
+        $this->assertEquals('08/06/2026-Louisa Reighn Alejo Santos-KLM012', $visitorId, 'Visitor ID must NEVER be prefixed - stored/written exactly as received');
         $this->assertEquals('kiosk-photos/16/first_entry-6a742692e29e3.jpg', $picture);
         $this->assertStringStartsWith('http', $pictureUrl, 'picture_url must be a fully-qualified URL');
         $this->assertStringContainsString('/storage/kiosk-photos/16/first_entry-6a742692e29e3.jpg', $pictureUrl);

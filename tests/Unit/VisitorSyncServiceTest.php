@@ -110,21 +110,27 @@ class VisitorSyncServiceTest extends TestCase
         $second = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'VIS-DUPE']));
 
         $this->assertEquals($first['registration_token'], $second['registration_token']);
-        $this->assertEquals(1, VisitorRequest::where('visitor_id', 'SNTRY-VIS-DUPE')->count());
+        $this->assertEquals(1, VisitorRequest::where('visitor_id', 'VIS-DUPE')->count());
     }
 
-    public function test_visitor_id_is_prefixed_with_sntry(): void
+    public function test_visitor_id_is_stored_exactly_as_received_no_prefix(): void
     {
         $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => '08/06/2026-Louisa Reighn Alejo Santos-KLM012']));
 
-        $this->assertEquals('SNTRY-08/06/2026-Louisa Reighn Alejo Santos-KLM012', $result['visitor_request']->visitor_id);
+        // Must be stored verbatim - no SNTRY- or any other modification.
+        // Only Login ID / Logout ID (separate, per-visitor_session values)
+        // carry that prefix - see VisitorSheetWriter::formatSentryId().
+        $this->assertEquals('08/06/2026-Louisa Reighn Alejo Santos-KLM012', $result['visitor_request']->visitor_id);
     }
 
-    public function test_visitor_id_prefix_is_not_doubled_if_already_present(): void
+    public function test_visitor_id_that_already_contains_sntry_is_preserved_unmodified(): void
     {
-        $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'SNTRY-ALREADY-PREFIXED']));
+        // If AppSheet ever happens to send a value that itself starts with
+        // "SNTRY-", it must still be stored exactly as received - the sync
+        // service must never inspect or alter visitor_id in any way.
+        $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'SNTRY-ALREADY-IN-PAYLOAD']));
 
-        $this->assertEquals('SNTRY-ALREADY-PREFIXED', $result['visitor_request']->visitor_id);
+        $this->assertEquals('SNTRY-ALREADY-IN-PAYLOAD', $result['visitor_request']->visitor_id);
     }
 
     public function test_appsheet_date_formats_are_parsed_correctly(): void
