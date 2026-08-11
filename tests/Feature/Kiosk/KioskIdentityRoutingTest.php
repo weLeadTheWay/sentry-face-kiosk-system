@@ -145,15 +145,18 @@ class KioskIdentityRoutingTest extends TestCase
         $this->assertNoNewDomainRows();
     }
 
-    public function test_4_truck_is_detected_and_placeholder_creates_no_rows(): void
+    public function test_4_truck_is_routed_to_identity_confirmation_creates_no_rows(): void
     {
+        // Truck is fully implemented as of Phase 3 - shares the exact same
+        // routing as Gatesale (see KioskTruckFlowTest for the full behavior).
         $this->makeDirectoryWithFace(0.40, [
             'visitor_type_id' => $this->truckType->visitor_type_id,
         ]);
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.40)]);
 
-        $response->assertOk()->assertJson(['success' => false, 'type' => 'truck_detected']);
+        $response->assertOk()->assertJson(['success' => false, 'type' => 'gatesale_confirm_identity']);
+        $this->assertEquals('Truck', $response->json('directory.visitor_type'));
         $this->assertNoNewDomainRows();
     }
 

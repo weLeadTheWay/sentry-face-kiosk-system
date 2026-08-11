@@ -107,14 +107,14 @@ class KioskController extends Controller
     }
 
     /**
-     * Employee/Gatesale/Truck aren't implemented yet - short-circuit them
-     * into a placeholder response before any VisitorRequest lookup runs, so
-     * zero rows are ever touched for those identities. A null/unrecognized
-     * visitor_type_id (e.g. a legacy directory row predating this field)
-     * intentionally falls through to the existing Visitor-with-Approval path
-     * below, matching current behavior exactly.
-     */
-    /**
+     * Employee isn't implemented yet - short-circuited into a placeholder
+     * response before any VisitorRequest lookup runs, so zero rows are ever
+     * touched. Gatesale and Truck are fully implemented (both funnel into
+     * handleSelfServiceRecognition() - one shared implementation, not two).
+     * A null/unrecognized visitor_type_id (e.g. a legacy directory row
+     * predating this field) intentionally falls through to the existing
+     * Visitor-with-Approval path below, matching current behavior exactly.
+     *
      * Driven by identity_type_name / visitor_type_name rather than the raw
      * foreign key IDs - the IDs are only stable because a seeder inserts
      * Employee/Visitor/Gatesale/Truck in a fixed order in every real
@@ -144,16 +144,8 @@ class KioskController extends Controller
 
         $visitorTypeName = $directory->visitorType?->visitor_type_name;
 
-        if ($visitorTypeName === 'Gatesale') {
-            return $this->handleGatesaleRecognition($directory, $kiosk);
-        }
-
-        if ($visitorTypeName === 'Truck') {
-            return response()->json([
-                'success' => false,
-                'type' => 'truck_detected',
-                'message' => 'Truck / Delivery access flow is not yet available.',
-            ]);
+        if ($visitorTypeName === 'Gatesale' || $visitorTypeName === 'Truck') {
+            return $this->handleSelfServiceRecognition($directory, $kiosk);
         }
 
         if ($visitorTypeName === 'Visitor' || is_null($directory->visitor_type_id)) {
@@ -168,9 +160,9 @@ class KioskController extends Controller
     }
 
     /**
-     * A directory can only ever have ONE ACTIVE Gatesale request at a time,
-     * across ALL farms - not scoped to a farm or a date, since ACTIVE is
-     * itself the authoritative "currently ongoing" signal (the expired-
+     * A directory can only ever have ONE ACTIVE Gatesale/Truck request at a
+     * time, across ALL farms - not scoped to a farm or a date, since ACTIVE
+     * is itself the authoritative "currently ongoing" signal (the expired-
      * session scheduler is what's responsible for closing out anything
      * stale). Shared by both the recognition-time check and
      * createGatesaleVisit()'s transactional dedup check.
@@ -183,16 +175,18 @@ class KioskController extends Controller
     }
 
     /**
-     * If an ACTIVE Gatesale request already exists for this directory at
-     * THIS farm, resume it directly (same success shape as Visitor-with-
-     * Approval - Go Out / Leave Farm) with no re-confirmation step. If it
-     * exists at a DIFFERENT farm, the visitor cannot enter here at all -
-     * a person cannot be physically present at two farms simultaneously,
-     * and must complete (Leave Farm) the other visit first. Only when no
-     * ACTIVE request exists anywhere does the visitor go through
-     * "Is this you?".
+     * Shared entry point for BOTH self-service visitor types (Gatesale and
+     * Truck) - one implementation, not two, since the flow is identical and
+     * only the identity data (Plate No. for Truck) differs. If an ACTIVE
+     * request already exists for this directory at THIS farm, resume it
+     * directly (same success shape as Visitor-with-Approval - Go Out /
+     * Leave Farm) with no re-confirmation step. If it exists at a DIFFERENT
+     * farm, the visitor cannot enter here at all - a person cannot be
+     * physically present at two farms simultaneously, and must complete
+     * (Leave Farm) the other visit first. Only when no ACTIVE request
+     * exists anywhere does the visitor go through "Is this you?".
      */
-    private function handleGatesaleRecognition(UserDirectory $directory, KioskDevice $kiosk): \Illuminate\Http\JsonResponse
+    private function handleSelfServiceRecognition(UserDirectory $directory, KioskDevice $kiosk): \Illuminate\Http\JsonResponse
     {
         $activeRequest = $this->activeGatesaleRequestQuery($directory->directory_id)->first();
 
@@ -207,14 +201,28 @@ class KioskController extends Controller
         return response()->json([
             'success' => false,
             'type' => 'gatesale_confirm_identity',
-            'directory' => [
-                'directory_id' => $directory->directory_id,
-                'full_name' => $directory->full_name,
-                'phone' => $directory->phone,
-                'email' => $directory->email,
-                'company' => $directory->company,
-            ],
+            'directory' => $this->selfServiceDirectoryPayload($directory),
         ]);
+    }
+
+    /**
+     * Shared directory payload shape returned by every self-service
+     * response (confirm-identity, update-details, register-identity) - one
+     * place, so the three never drift out of sync with each other.
+     * plate_no is included unconditionally (null for Gatesale); the
+     * frontend keys off `visitor_type` to decide whether to show the field.
+     */
+    private function selfServiceDirectoryPayload(UserDirectory $directory): array
+    {
+        return [
+            'directory_id' => $directory->directory_id,
+            'full_name' => $directory->full_name,
+            'phone' => $directory->phone,
+            'email' => $directory->email,
+            'company' => $directory->company,
+            'plate_no' => $directory->plate_no,
+            'visitor_type' => $directory->visitorType?->visitor_type_name,
+        ];
     }
 
     private function gatesaleActiveElsewhereResponse(VisitorRequest $activeRequest): \Illuminate\Http\JsonResponse
@@ -231,9 +239,10 @@ class KioskController extends Controller
     /**
      * gatesaleUpdateDetails/gatesaleCreateVisit/gatesaleRegisterIdentity all
      * accept a client-supplied directory_id and must not trust it -
-     * independent of route name or frontend assumptions.
+     * independent of route name or frontend assumptions. Accepts either
+     * self-service type (Gatesale or Truck).
      */
-    private function resolveGatesaleDirectoryOrFail(int $directoryId): UserDirectory
+    private function resolveSelfServiceDirectoryOrFail(int $directoryId): UserDirectory
     {
         $directory = UserDirectory::find($directoryId);
 
@@ -241,7 +250,7 @@ class KioskController extends Controller
             !$directory
             || !$directory->is_active
             || $directory->identityType?->identity_type_name !== 'Visitor'
-            || $directory->visitorType?->visitor_type_name !== 'Gatesale'
+            || !in_array($directory->visitorType?->visitor_type_name, ['Gatesale', 'Truck'], true)
         ) {
             abort(422, 'Identity could not be confirmed. Please contact the administrator.');
         }
@@ -321,30 +330,40 @@ class KioskController extends Controller
     /**
      * EDIT DETAILS save. Only the visitor's own contact/profile fields are
      * editable here - directory_id/identity_type_id/visitor_type_id can
-     * never be changed through this endpoint. Never creates a request or
-     * session; the frontend re-shows "Is this you?" from the response and
-     * still requires an explicit YES.
+     * never be changed through this endpoint. Plate No. is required (and
+     * editable) only for a Truck directory; a Gatesale directory ignores it
+     * entirely. Never creates a request or session; the frontend re-shows
+     * "Is this you?" from the response and still requires an explicit YES.
      */
     public function gatesaleUpdateDetails(Request $request)
     {
-        $directory = $this->resolveGatesaleDirectoryOrFail((int) $request->input('directory_id'));
+        $directory = $this->resolveSelfServiceDirectoryOrFail((int) $request->input('directory_id'));
 
-        $directory->update([
+        $updates = [
             'full_name' => $request->input('full_name', $directory->full_name),
             'email' => $request->input('email'),
             'phone' => $request->input('phone'),
             'company' => $request->input('company'),
-        ]);
+        ];
+
+        if ($directory->visitorType?->visitor_type_name === 'Truck') {
+            $plateNo = $request->input('plate_no');
+
+            if (!$plateNo) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Plate No. is required.',
+                ], 422);
+            }
+
+            $updates['plate_no'] = $plateNo;
+        }
+
+        $directory->update($updates);
 
         return response()->json([
             'success' => true,
-            'directory' => [
-                'directory_id' => $directory->directory_id,
-                'full_name' => $directory->full_name,
-                'phone' => $directory->phone,
-                'email' => $directory->email,
-                'company' => $directory->company,
-            ],
+            'directory' => $this->selfServiceDirectoryPayload($directory),
         ]);
     }
 
@@ -358,7 +377,7 @@ class KioskController extends Controller
     public function gatesaleCreateVisit(Request $request)
     {
         $kiosk = $request->attributes->get('kiosk');
-        $directory = $this->resolveGatesaleDirectoryOrFail((int) $request->input('directory_id'));
+        $directory = $this->resolveSelfServiceDirectoryOrFail((int) $request->input('directory_id'));
 
         $visitorRequest = $this->createGatesaleVisit(
             $directory,
@@ -376,10 +395,12 @@ class KioskController extends Controller
      * Identity registration ONLY - no visitor_request/session/entry_log is
      * created here. Host/Origin/Purpose belong to the separate Visit
      * Details step (gatesaleCreateVisit) that follows a successful
-     * registration. Re-checks FaceMatchingService first so a genuine
-     * re-scan (flaky first attempt, etc) never creates a duplicate
-     * directory/face_profile - directory+face_profile creation is one
-     * transaction so a failure at either step leaves zero partial rows.
+     * registration. Plate No. is required only when Truck is selected -
+     * validated server-side, not just by the frontend. Re-checks
+     * FaceMatchingService first so a genuine re-scan (flaky first attempt,
+     * etc) never creates a duplicate directory/face_profile -
+     * directory+face_profile creation is one transaction so a failure at
+     * either step leaves zero partial rows.
      */
     public function gatesaleRegisterIdentity(Request $request)
     {
@@ -390,10 +411,9 @@ class KioskController extends Controller
         $descriptor = $request->input('descriptor');
         $email = $request->input('email');
         $phone = $request->input('phone');
+        $plateNo = $request->input('plate_no');
 
-        // Only Gatesale is implemented in this phase - Truck is a
-        // selectable option reserved for future implementation.
-        if ($visitorType !== 'Gatesale') {
+        if (!in_array($visitorType, ['Gatesale', 'Truck'], true)) {
             return response()->json([
                 'success' => false,
                 'message' => 'This visitor type is not yet available.',
@@ -407,12 +427,20 @@ class KioskController extends Controller
             ], 422);
         }
 
+        if ($visitorType === 'Truck' && !$plateNo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Plate No. is required for Truck registration.',
+            ], 422);
+        }
+
         $match = $this->faceMatchingService->findMatch($descriptor);
         if ($match) {
             $matchedDirectory = $match->directory;
+            $matchedVisitorType = $matchedDirectory->visitorType?->visitor_type_name;
 
-            if ($matchedDirectory->identityType?->identity_type_name === 'Visitor' && $matchedDirectory->visitorType?->visitor_type_name === 'Gatesale') {
-                return $this->handleGatesaleRecognition($matchedDirectory, $kiosk);
+            if ($matchedDirectory->identityType?->identity_type_name === 'Visitor' && in_array($matchedVisitorType, ['Gatesale', 'Truck'], true)) {
+                return $this->handleSelfServiceRecognition($matchedDirectory, $kiosk);
             }
 
             return response()->json([
@@ -422,17 +450,18 @@ class KioskController extends Controller
             ], 422);
         }
 
-        return DB::transaction(function () use ($fullName, $email, $phone, $company, $descriptor) {
+        return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $descriptor) {
             $directory = UserDirectory::create([
                 'identity_type_id' => IdentityType::where('identity_type_name', 'Visitor')->value('identity_type_id'),
-                'visitor_type_id' => VisitorType::where('visitor_type_name', 'Gatesale')->value('visitor_type_id'),
-                'person_reference' => $email ?: ($phone ?: ('GATESALE-' . Str::upper(Str::random(8)))),
+                'visitor_type_id' => VisitorType::where('visitor_type_name', $visitorType)->value('visitor_type_id'),
+                'person_reference' => $email ?: ($phone ?: (strtoupper($visitorType) . '-' . Str::upper(Str::random(8)))),
                 'first_name' => $fullName,
                 'last_name' => '',
                 'full_name' => $fullName,
                 'email' => $email,
                 'phone' => $phone,
                 'company' => $company,
+                'plate_no' => $visitorType === 'Truck' ? $plateNo : null,
             ]);
 
             FaceProfile::create([
@@ -444,13 +473,7 @@ class KioskController extends Controller
 
             return response()->json([
                 'success' => true,
-                'directory' => [
-                    'directory_id' => $directory->directory_id,
-                    'full_name' => $directory->full_name,
-                    'phone' => $directory->phone,
-                    'email' => $directory->email,
-                    'company' => $directory->company,
-                ],
+                'directory' => $this->selfServiceDirectoryPayload($directory),
             ]);
         });
     }

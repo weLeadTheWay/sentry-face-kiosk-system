@@ -132,7 +132,7 @@ class ResolveExpiredVisitorSessions extends Command
 
         $this->logResolution($visitorRequest, $previousRequestStatus, 'COMPLETED_AUTO', $previousSessionStatus, 'COMPLETED_AUTO', 'OUTSIDE_AUTO_COMPLETED');
 
-        if (!$sheetWriter || $visitorRequest->isGatesale()) {
+        if (!$sheetWriter || $visitorRequest->isExcludedFromGoogleSheets()) {
             return;
         }
 

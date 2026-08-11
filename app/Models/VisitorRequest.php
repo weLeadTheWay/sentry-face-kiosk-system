@@ -86,14 +86,25 @@ class VisitorRequest extends Model
         return $this->belongsTo(UserDirectory::class, 'directory_id', 'directory_id');
     }
 
-    /**
-     * Gatesale visits must never trigger a Google Sheets write - checked at
-     * both existing Sheets call sites (VisitorKioskService, the expired-
-     * session scheduler) rather than adding a parameter to VisitorSheetWriter.
-     */
     public function isGatesale(): bool
     {
         return $this->directory?->visitorType?->visitor_type_name === 'Gatesale';
+    }
+
+    public function isTruck(): bool
+    {
+        return $this->directory?->visitorType?->visitor_type_name === 'Truck';
+    }
+
+    /**
+     * Gatesale and Truck visits must never trigger a Google Sheets write -
+     * checked at both existing Sheets call sites (VisitorKioskService, the
+     * expired-session scheduler) rather than adding a parameter to
+     * VisitorSheetWriter. Visitor-with-Approval is unaffected.
+     */
+    public function isExcludedFromGoogleSheets(): bool
+    {
+        return $this->isGatesale() || $this->isTruck();
     }
 
     public function farm(): BelongsTo

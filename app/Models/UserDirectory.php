@@ -26,6 +26,7 @@ class UserDirectory extends Model
         'email',
         'phone',
         'company',
+        'plate_no',
         'employee_no',
         'visitor_type_id',
         'employee_type_id',

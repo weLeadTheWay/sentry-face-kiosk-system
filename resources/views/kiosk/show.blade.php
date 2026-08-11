@@ -239,6 +239,7 @@
                 <input type="email" class="setup-input" id="gatesale-edit-email" placeholder="Email">
                 <input type="text" class="setup-input" id="gatesale-edit-phone" placeholder="Phone">
                 <input type="text" class="setup-input" id="gatesale-edit-company" placeholder="Company">
+                <input type="text" class="setup-input" id="gatesale-edit-plate-no" placeholder="Plate No." style="display:none;">
                 <button class="setup-btn" onclick="gatesaleSaveEdit()">Save</button>
             </div>
             <div id="gatesale-visit-step" style="display:none;">
@@ -251,14 +252,15 @@
             </div>
             <div id="gatesale-register-step" style="display:none;">
                 <div class="setup-title">Visitor Registration</div>
-                <select class="setup-input" id="gatesale-reg-type">
+                <select class="setup-input" id="gatesale-reg-type" onchange="toggleGatesaleRegPlateNo()">
                     <option value="Gatesale">Gatesale</option>
-                    <option value="Truck">Truck / Delivery (coming soon)</option>
+                    <option value="Truck">Truck / Delivery</option>
                 </select>
                 <input type="text" class="setup-input" id="gatesale-reg-name" placeholder="Full Name">
                 <input type="email" class="setup-input" id="gatesale-reg-email" placeholder="Email (optional)">
                 <input type="text" class="setup-input" id="gatesale-reg-phone" placeholder="Phone (optional)">
                 <input type="text" class="setup-input" id="gatesale-reg-company" placeholder="Company">
+                <input type="text" class="setup-input" id="gatesale-reg-plate-no" placeholder="Plate No." style="display:none;">
                 <button class="setup-btn" style="margin-bottom:10px;" onclick="submitGatesaleRegistration()">Save</button>
                 <button class="setup-btn" style="background:#6c757d;" onclick="gatesaleCancelRegistration()">Cancel</button>
             </div>
@@ -747,6 +749,7 @@
             if (directory.phone) lines.push(`<strong>Phone:</strong> ${directory.phone}`);
             if (directory.email) lines.push(`<strong>Email:</strong> ${directory.email}`);
             if (directory.company) lines.push(`<strong>Company:</strong> ${directory.company}`);
+            if (directory.plate_no) lines.push(`<strong>Plate No.:</strong> ${directory.plate_no}`);
             document.getElementById('gatesale-confirm-details').innerHTML = lines.join('<br>');
 
             document.getElementById('gatesale-confirm-step').style.display = 'block';
@@ -774,6 +777,11 @@
             document.getElementById('gatesale-edit-phone').value = pendingGatesaleDirectory.phone || '';
             document.getElementById('gatesale-edit-company').value = pendingGatesaleDirectory.company || '';
 
+            const isTruck = pendingGatesaleDirectory.visitor_type === 'Truck';
+            const plateNoField = document.getElementById('gatesale-edit-plate-no');
+            plateNoField.value = pendingGatesaleDirectory.plate_no || '';
+            plateNoField.style.display = isTruck ? 'block' : 'none';
+
             document.getElementById('gatesale-confirm-step').style.display = 'none';
             document.getElementById('gatesale-edit-step').style.display = 'block';
             startGatesaleIdleTimer();
@@ -789,6 +797,10 @@
                 phone: document.getElementById('gatesale-edit-phone').value.trim(),
                 company: document.getElementById('gatesale-edit-company').value.trim(),
             };
+
+            if (pendingGatesaleDirectory.visitor_type === 'Truck') {
+                payload.plate_no = document.getElementById('gatesale-edit-plate-no').value.trim();
+            }
 
             try {
                 const response = await fetch(`/kiosk/${kioskId}/gatesale/update-details`, {
@@ -830,8 +842,10 @@
             document.getElementById('gatesale-host-name').value = '';
             document.getElementById('gatesale-origin').value = '';
             // Gatesale visitors are usually here to pick up eggs - a
-            // sensible, editable default rather than an empty field.
-            document.getElementById('gatesale-purpose').value = 'Pickup eggs';
+            // sensible, editable default rather than an empty field. Truck
+            // visits have no typical purpose, so it's left blank.
+            document.getElementById('gatesale-purpose').value =
+                pendingGatesaleDirectory.visitor_type === 'Truck' ? '' : 'Pickup Eggs';
             document.getElementById('gatesale-visit-banner').style.display = showBanner ? 'block' : 'none';
             document.getElementById('gatesale-visit-step').style.display = 'block';
             showView('gatesale-view');
@@ -921,9 +935,10 @@
             currentState = STATES.PROCESSING;
 
             document.getElementById('gatesale-reg-type').value = 'Gatesale';
-            ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company'].forEach(id => {
+            ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company', 'gatesale-reg-plate-no'].forEach(id => {
                 document.getElementById(id).value = '';
             });
+            toggleGatesaleRegPlateNo();
 
             document.getElementById('gatesale-confirm-step').style.display = 'none';
             document.getElementById('gatesale-edit-step').style.display = 'none';
@@ -932,6 +947,11 @@
 
             showView('gatesale-view');
             startGatesaleIdleTimer();
+        }
+
+        function toggleGatesaleRegPlateNo() {
+            const isTruck = document.getElementById('gatesale-reg-type').value === 'Truck';
+            document.getElementById('gatesale-reg-plate-no').style.display = isTruck ? 'block' : 'none';
         }
 
         function gatesaleCancelRegistration() {
@@ -943,18 +963,20 @@
 
         async function submitGatesaleRegistration() {
             const visitorType = document.getElementById('gatesale-reg-type').value;
-            if (visitorType !== 'Gatesale') {
-                alert('Truck / Delivery registration is not yet available.');
-                return;
-            }
 
             const fullName = document.getElementById('gatesale-reg-name').value.trim();
             const company = document.getElementById('gatesale-reg-company').value.trim();
             const email = document.getElementById('gatesale-reg-email').value.trim();
             const phone = document.getElementById('gatesale-reg-phone').value.trim();
+            const plateNo = document.getElementById('gatesale-reg-plate-no').value.trim();
 
             if (!fullName || !company) {
                 alert('Full Name and Company are required.');
+                return;
+            }
+
+            if (visitorType === 'Truck' && !plateNo) {
+                alert('Plate No. is required for Truck registration.');
                 return;
             }
 
@@ -975,6 +997,7 @@
                         company: company,
                         email: email,
                         phone: phone,
+                        plate_no: plateNo,
                         descriptor: capturedGatesaleDescriptor,
                     }),
                 });
