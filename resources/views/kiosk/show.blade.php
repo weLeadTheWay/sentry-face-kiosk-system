@@ -224,6 +224,47 @@
         </div>
     </div>
 
+    <div class="kiosk-container" id="gatesale-view" style="display:none;">
+        <div class="setup-prompt" style="max-width: 480px;">
+            <div id="gatesale-confirm-step">
+                <div class="setup-title">Is this you?</div>
+                <div id="gatesale-confirm-details" style="text-align:left; margin-bottom: 20px; color:#333; line-height:1.6;"></div>
+                <button class="setup-btn" style="background:#28a745; margin-bottom:10px;" onclick="gatesaleConfirmYes()">YES</button>
+                <button class="setup-btn" style="background:#6c757d; margin-bottom:10px;" onclick="gatesaleShowEdit()">EDIT DETAILS</button>
+                <button class="setup-btn" style="background:#dc3545;" onclick="gatesaleConfirmNo()">NO</button>
+            </div>
+            <div id="gatesale-edit-step" style="display:none;">
+                <div class="setup-title">Edit Details</div>
+                <input type="text" class="setup-input" id="gatesale-edit-name" placeholder="Full Name">
+                <input type="email" class="setup-input" id="gatesale-edit-email" placeholder="Email">
+                <input type="text" class="setup-input" id="gatesale-edit-phone" placeholder="Phone">
+                <input type="text" class="setup-input" id="gatesale-edit-company" placeholder="Company">
+                <button class="setup-btn" onclick="gatesaleSaveEdit()">Save</button>
+            </div>
+            <div id="gatesale-visit-step" style="display:none;">
+                <div class="setup-title">Visit Details</div>
+                <p id="gatesale-visit-banner" style="display:none; color:#28a745; margin-bottom:15px;">Face registration successful. Please provide your visit details.</p>
+                <input type="text" class="setup-input" id="gatesale-host-name" placeholder="Host Name">
+                <input type="text" class="setup-input" id="gatesale-origin" placeholder="Origin">
+                <input type="text" class="setup-input" id="gatesale-purpose" placeholder="Purpose">
+                <button class="setup-btn" id="gatesale-visit-submit-btn" onclick="gatesaleSubmitVisit()">Continue</button>
+            </div>
+            <div id="gatesale-register-step" style="display:none;">
+                <div class="setup-title">Visitor Registration</div>
+                <select class="setup-input" id="gatesale-reg-type">
+                    <option value="Gatesale">Gatesale</option>
+                    <option value="Truck">Truck / Delivery (coming soon)</option>
+                </select>
+                <input type="text" class="setup-input" id="gatesale-reg-name" placeholder="Full Name">
+                <input type="email" class="setup-input" id="gatesale-reg-email" placeholder="Email (optional)">
+                <input type="text" class="setup-input" id="gatesale-reg-phone" placeholder="Phone (optional)">
+                <input type="text" class="setup-input" id="gatesale-reg-company" placeholder="Company">
+                <button class="setup-btn" style="margin-bottom:10px;" onclick="submitGatesaleRegistration()">Save</button>
+                <button class="setup-btn" style="background:#6c757d;" onclick="gatesaleCancelRegistration()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
@@ -268,7 +309,7 @@
         }
 
         function showView(id) {
-            ['setup-view', 'main-view', 'unauthorized-view'].forEach(v => {
+            ['setup-view', 'main-view', 'unauthorized-view', 'gatesale-view'].forEach(v => {
                 document.getElementById(v).style.display = (v === id) ? 'flex' : 'none';
             });
         }
@@ -459,6 +500,7 @@
         // QR_SCAN stays QR_SCAN (e.g. a receptionist processing several QR
         // visitors in a row), IDLE stays IDLE. Never force face mode.
         function finishInteraction() {
+            clearGatesaleIdleTimer();
             lastRecognizedDirectoryId = null;
             lastAuthMethod = 'FACE';
             currentVisitorRequest = null;
@@ -631,10 +673,23 @@
                 return;
             }
 
-            if (['employee_detected', 'gatesale_detected', 'truck_detected', 'identity_not_supported', 'visitor_type_not_supported'].includes(result.type)) {
+            if (result.type === 'gatesale_active_elsewhere') {
+                updateStatus(result.message, 'error');
+                showActionButtons(null);
+                setTimeout(() => finishInteraction(), 3000);
+                return;
+            }
+
+            if (['employee_detected', 'truck_detected', 'identity_not_supported', 'visitor_type_not_supported'].includes(result.type)) {
                 updateStatus(result.message, 'info');
                 showActionButtons(null);
                 setTimeout(() => finishInteraction(), 3000);
+                return;
+            }
+
+            if (result.type === 'gatesale_confirm_identity') {
+                currentState = STATES.PROCESSING; // pause the background detection loop while this multi-step flow is open
+                showGatesaleConfirm(result.directory);
                 return;
             }
 
@@ -652,20 +707,300 @@
             }
         }
 
-        // Placeholder only (Phase 1) - creates no record and starts no
-        // registration process. Wired up properly in a future phase.
+        // Registration entry point for an unrecognized face - Gatesale only
+        // in this phase (Truck registration is not implemented yet).
         function showRegisterVisitorPlaceholder() {
             document.getElementById('action-buttons').innerHTML =
-                '<button class="btn btn-secondary" onclick="registerVisitorPlaceholder()">Registration</button>';
+                '<button class="btn btn-secondary" onclick="startGatesaleRegistration()">Registration</button>';
         }
 
-        function registerVisitorPlaceholder() {
-            updateStatus(
-                'Registration for Gatesale and Truck / Delivery visitors will be available in an upcoming update.',
-                'info'
-            );
+        // ===== Gatesale flow =====
 
-            document.getElementById('action-buttons').innerHTML = '';
+        let pendingGatesaleDirectory = null;
+        let capturedGatesaleDescriptor = null;
+        let gatesaleIdleTimer = null;
+        const GATESALE_IDLE_TIMEOUT_MS = 30000;
+
+        // The Gatesale confirm/edit/visit-details flow waits indefinitely on
+        // touch input, unlike every other PROCESSING use in this file (which
+        // is always transient). Without this, a visitor walking away mid-flow
+        // would strand the kiosk in PROCESSING forever.
+        function startGatesaleIdleTimer() {
+            clearGatesaleIdleTimer();
+            gatesaleIdleTimer = setTimeout(() => {
+                showView('main-view');
+                finishInteraction();
+            }, GATESALE_IDLE_TIMEOUT_MS);
+        }
+
+        function clearGatesaleIdleTimer() {
+            if (gatesaleIdleTimer) {
+                clearTimeout(gatesaleIdleTimer);
+                gatesaleIdleTimer = null;
+            }
+        }
+
+        function showGatesaleConfirm(directory) {
+            pendingGatesaleDirectory = directory;
+
+            const lines = [`<strong>Name:</strong> ${directory.full_name}`];
+            if (directory.phone) lines.push(`<strong>Phone:</strong> ${directory.phone}`);
+            if (directory.email) lines.push(`<strong>Email:</strong> ${directory.email}`);
+            if (directory.company) lines.push(`<strong>Company:</strong> ${directory.company}`);
+            document.getElementById('gatesale-confirm-details').innerHTML = lines.join('<br>');
+
+            document.getElementById('gatesale-confirm-step').style.display = 'block';
+            document.getElementById('gatesale-edit-step').style.display = 'none';
+            document.getElementById('gatesale-visit-step').style.display = 'none';
+            document.getElementById('gatesale-register-step').style.display = 'none';
+
+            showView('gatesale-view');
+            startGatesaleIdleTimer();
+        }
+
+        // Purely client-side, zero fetch calls - the matched person's
+        // records must never be touched when identity isn't confirmed.
+        function gatesaleConfirmNo() {
+            clearGatesaleIdleTimer();
+            pendingGatesaleDirectory = null;
+            showView('main-view');
+            updateStatus('Identity could not be confirmed. Please contact the administrator.', 'error');
+            setTimeout(() => finishInteraction(), 3000);
+        }
+
+        function gatesaleShowEdit() {
+            document.getElementById('gatesale-edit-name').value = pendingGatesaleDirectory.full_name || '';
+            document.getElementById('gatesale-edit-email').value = pendingGatesaleDirectory.email || '';
+            document.getElementById('gatesale-edit-phone').value = pendingGatesaleDirectory.phone || '';
+            document.getElementById('gatesale-edit-company').value = pendingGatesaleDirectory.company || '';
+
+            document.getElementById('gatesale-confirm-step').style.display = 'none';
+            document.getElementById('gatesale-edit-step').style.display = 'block';
+            startGatesaleIdleTimer();
+        }
+
+        // Never creates a request or session by itself - always returns to
+        // "Is this you?" afterward, requiring an explicit YES.
+        async function gatesaleSaveEdit() {
+            const payload = {
+                directory_id: pendingGatesaleDirectory.directory_id,
+                full_name: document.getElementById('gatesale-edit-name').value.trim(),
+                email: document.getElementById('gatesale-edit-email').value.trim(),
+                phone: document.getElementById('gatesale-edit-phone').value.trim(),
+                company: document.getElementById('gatesale-edit-company').value.trim(),
+            };
+
+            try {
+                const response = await fetch(`/kiosk/${kioskId}/gatesale/update-details`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                        'X-KIOSK-TOKEN': kioskToken,
+                    },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    showGatesaleConfirm(result.directory);
+                } else {
+                    alert(result.message || 'Could not save details. Please try again.');
+                }
+            } catch (err) {
+                console.error('Gatesale update-details error:', err);
+                alert('Could not save details. Please try again.');
+            }
+        }
+
+        // An ACTIVE request is never reachable from here anymore -
+        // handleGatesaleRecognition() resolves that case before
+        // gatesale_confirm_identity is ever returned - so YES always means
+        // "collect Host/Origin/Purpose for a brand new visit."
+        function gatesaleConfirmYes() {
+            clearGatesaleIdleTimer();
+            showGatesaleVisitStep(false);
+        }
+
+        function showGatesaleVisitStep(showBanner) {
+            document.getElementById('gatesale-confirm-step').style.display = 'none';
+            document.getElementById('gatesale-edit-step').style.display = 'none';
+            document.getElementById('gatesale-register-step').style.display = 'none';
+            document.getElementById('gatesale-host-name').value = '';
+            document.getElementById('gatesale-origin').value = '';
+            document.getElementById('gatesale-purpose').value = '';
+            document.getElementById('gatesale-visit-banner').style.display = showBanner ? 'block' : 'none';
+            document.getElementById('gatesale-visit-step').style.display = 'block';
+            showView('gatesale-view');
+            startGatesaleIdleTimer();
+        }
+
+        function gatesaleSubmitVisit() {
+            const hostName = document.getElementById('gatesale-host-name').value.trim();
+            const origin = document.getElementById('gatesale-origin').value.trim();
+            const purpose = document.getElementById('gatesale-purpose').value.trim();
+
+            if (!hostName || !origin || !purpose) {
+                alert('Host Name, Origin, and Purpose are all required.');
+                return;
+            }
+
+            submitGatesaleCreateVisit({ host_name: hostName, origin: origin, purpose: purpose });
+        }
+
+        async function submitGatesaleCreateVisit(extra) {
+            clearGatesaleIdleTimer();
+            const btn = document.getElementById('gatesale-visit-submit-btn');
+            if (btn) btn.disabled = true;
+
+            try {
+                // Same capture used by the existing processAction() flow -
+                // the video element keeps streaming even while #main-view
+                // is hidden behind #gatesale-view, so this works regardless
+                // of which view is currently showing.
+                const video = document.getElementById('webcam');
+                let photoBase64 = null;
+                if (video && video.videoWidth) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    photoBase64 = canvas.toDataURL('image/jpeg');
+                }
+
+                const response = await fetch(`/kiosk/${kioskId}/gatesale/create-visit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                        'X-KIOSK-TOKEN': kioskToken,
+                    },
+                    body: JSON.stringify(Object.assign({ directory_id: pendingGatesaleDirectory.directory_id, photo: photoBase64 }, extra)),
+                });
+
+                showView('main-view');
+                // Response shape matches a normal /recognize success - reuse
+                // the existing handler rather than duplicating its logic
+                // (currentVisitorRequest, modeBeforeDetection, etc).
+                await handleRecognitionResponse(response, 'FACE');
+                if (currentState === STATES.PROCESSING) {
+                    // handleRecognitionResponse's generic failure branch only
+                    // ever runs today from IDLE, so it doesn't recover
+                    // PROCESSING on its own - force recovery here so a
+                    // create-visit failure can never strand the kiosk.
+                    finishInteraction();
+                }
+            } catch (err) {
+                console.error('Gatesale create-visit error:', err);
+                showView('main-view');
+                finishInteraction();
+                updateStatus('Something went wrong. Please try again.', 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // New-face Gatesale registration - captures one fresh descriptor from
+        // the already-running video feed, then shows the registration
+        // overlay (identity fields only - no Host/Origin/Purpose here).
+        async function startGatesaleRegistration() {
+            const video = document.getElementById('webcam');
+            const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+            const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+
+            if (!detection) {
+                updateStatus('No face detected. Please look at the camera and try again.', 'error');
+                return;
+            }
+
+            capturedGatesaleDescriptor = Array.from(detection.descriptor);
+            currentState = STATES.PROCESSING;
+
+            document.getElementById('gatesale-reg-type').value = 'Gatesale';
+            ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+
+            document.getElementById('gatesale-confirm-step').style.display = 'none';
+            document.getElementById('gatesale-edit-step').style.display = 'none';
+            document.getElementById('gatesale-visit-step').style.display = 'none';
+            document.getElementById('gatesale-register-step').style.display = 'block';
+
+            showView('gatesale-view');
+            startGatesaleIdleTimer();
+        }
+
+        function gatesaleCancelRegistration() {
+            clearGatesaleIdleTimer();
+            capturedGatesaleDescriptor = null;
+            showView('main-view');
+            finishInteraction();
+        }
+
+        async function submitGatesaleRegistration() {
+            const visitorType = document.getElementById('gatesale-reg-type').value;
+            if (visitorType !== 'Gatesale') {
+                alert('Truck / Delivery registration is not yet available.');
+                return;
+            }
+
+            const fullName = document.getElementById('gatesale-reg-name').value.trim();
+            const company = document.getElementById('gatesale-reg-company').value.trim();
+            const email = document.getElementById('gatesale-reg-email').value.trim();
+            const phone = document.getElementById('gatesale-reg-phone').value.trim();
+
+            if (!fullName || !company) {
+                alert('Full Name and Company are required.');
+                return;
+            }
+
+            clearGatesaleIdleTimer();
+
+            try {
+                const response = await fetch(`/kiosk/${kioskId}/gatesale/register-identity`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                        'X-KIOSK-TOKEN': kioskToken,
+                    },
+                    body: JSON.stringify({
+                        visitor_type: visitorType,
+                        full_name: fullName,
+                        company: company,
+                        email: email,
+                        phone: phone,
+                        descriptor: capturedGatesaleDescriptor,
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    // Identity registered - no visitor_request yet. Go
+                    // straight to Visit Details (Host/Origin/Purpose), the
+                    // visitor has already explicitly identified themselves.
+                    pendingGatesaleDirectory = result.directory;
+                    showGatesaleVisitStep(true);
+                    return;
+                }
+
+                if (result.type === 'gatesale_confirm_identity') {
+                    // This face actually already exists - route through the
+                    // normal identity-confirmation flow instead.
+                    showGatesaleConfirm(result.directory);
+                    return;
+                }
+
+                showView('main-view');
+                finishInteraction();
+                updateStatus(result.message || 'Identity could not be confirmed. Please contact the administrator.', 'error');
+            } catch (err) {
+                console.error('Gatesale registration error:', err);
+                alert('Something went wrong. Please try again.');
+            }
         }
 
         initialize();

@@ -24,6 +24,7 @@ class VisitorRequest extends Model
         'farm_id',
         'host_name',
         'purpose',
+        'origin',
         'visit_datetime',
         'departure_datetime',
         'registration_token',
@@ -83,6 +84,16 @@ class VisitorRequest extends Model
     public function directory(): BelongsTo
     {
         return $this->belongsTo(UserDirectory::class, 'directory_id', 'directory_id');
+    }
+
+    /**
+     * Gatesale visits must never trigger a Google Sheets write - checked at
+     * both existing Sheets call sites (VisitorKioskService, the expired-
+     * session scheduler) rather than adding a parameter to VisitorSheetWriter.
+     */
+    public function isGatesale(): bool
+    {
+        return $this->directory?->visitorType?->visitor_type_name === 'Gatesale';
     }
 
     public function farm(): BelongsTo

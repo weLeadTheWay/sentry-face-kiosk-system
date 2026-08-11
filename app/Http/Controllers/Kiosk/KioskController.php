@@ -3,12 +3,18 @@
 namespace App\Http\Controllers\Kiosk;
 
 use App\Http\Controllers\Controller;
+use App\Models\FaceProfile;
+use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
 use App\Models\VisitorRequest;
+use App\Models\VisitorType;
 use App\Services\Kiosk\VisitorKioskService;
 use App\Services\Face\FaceMatchingService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class KioskController extends Controller
 {
@@ -52,7 +58,7 @@ class KioskController extends Controller
 
             $directory = $match->directory;
 
-            $identityResponse = $this->routeByIdentity($directory);
+            $identityResponse = $this->routeByIdentity($directory, $kiosk);
             if ($identityResponse !== null) {
                 return $identityResponse;
             }
@@ -116,7 +122,7 @@ class KioskController extends Controller
      * fresh RefreshDatabase test DB with no seeder run, for example, would
      * assign different auto-increment IDs). Names are the actual contract.
      */
-    private function routeByIdentity(UserDirectory $directory): ?\Illuminate\Http\JsonResponse
+    private function routeByIdentity(UserDirectory $directory, KioskDevice $kiosk): ?\Illuminate\Http\JsonResponse
     {
         $identityTypeName = $directory->identityType?->identity_type_name;
 
@@ -139,11 +145,7 @@ class KioskController extends Controller
         $visitorTypeName = $directory->visitorType?->visitor_type_name;
 
         if ($visitorTypeName === 'Gatesale') {
-            return response()->json([
-                'success' => false,
-                'type' => 'gatesale_detected',
-                'message' => 'Gatesale access flow is not yet available.',
-            ]);
+            return $this->handleGatesaleRecognition($directory, $kiosk);
         }
 
         if ($visitorTypeName === 'Truck') {
@@ -163,6 +165,294 @@ class KioskController extends Controller
             'type' => 'visitor_type_not_supported',
             'message' => 'This visitor type is not yet supported.',
         ]);
+    }
+
+    /**
+     * A directory can only ever have ONE ACTIVE Gatesale request at a time,
+     * across ALL farms - not scoped to a farm or a date, since ACTIVE is
+     * itself the authoritative "currently ongoing" signal (the expired-
+     * session scheduler is what's responsible for closing out anything
+     * stale). Shared by both the recognition-time check and
+     * createGatesaleVisit()'s transactional dedup check.
+     */
+    private function activeGatesaleRequestQuery(int $directoryId)
+    {
+        return VisitorRequest::where('directory_id', $directoryId)
+            ->where('request_status', 'ACTIVE')
+            ->orderByDesc('visitor_request_id');
+    }
+
+    /**
+     * If an ACTIVE Gatesale request already exists for this directory at
+     * THIS farm, resume it directly (same success shape as Visitor-with-
+     * Approval - Go Out / Leave Farm) with no re-confirmation step. If it
+     * exists at a DIFFERENT farm, the visitor cannot enter here at all -
+     * a person cannot be physically present at two farms simultaneously,
+     * and must complete (Leave Farm) the other visit first. Only when no
+     * ACTIVE request exists anywhere does the visitor go through
+     * "Is this you?".
+     */
+    private function handleGatesaleRecognition(UserDirectory $directory, KioskDevice $kiosk): \Illuminate\Http\JsonResponse
+    {
+        $activeRequest = $this->activeGatesaleRequestQuery($directory->directory_id)->first();
+
+        if ($activeRequest) {
+            if ($activeRequest->farm_id !== $kiosk->farm_id) {
+                return $this->gatesaleActiveElsewhereResponse($activeRequest);
+            }
+
+            return $this->buildRecognitionResponse($activeRequest, 'gatesale_match', $directory, $kiosk);
+        }
+
+        return response()->json([
+            'success' => false,
+            'type' => 'gatesale_confirm_identity',
+            'directory' => [
+                'directory_id' => $directory->directory_id,
+                'full_name' => $directory->full_name,
+                'phone' => $directory->phone,
+                'email' => $directory->email,
+                'company' => $directory->company,
+            ],
+        ]);
+    }
+
+    private function gatesaleActiveElsewhereResponse(VisitorRequest $activeRequest): \Illuminate\Http\JsonResponse
+    {
+        $activeFarmName = $activeRequest->farm->farm_name ?? 'another farm';
+
+        return response()->json([
+            'success' => false,
+            'type' => 'gatesale_active_elsewhere',
+            'message' => "This visitor is currently active at {$activeFarmName} and cannot enter here until that visit ends.",
+        ], 403);
+    }
+
+    /**
+     * gatesaleUpdateDetails/gatesaleCreateVisit/gatesaleRegisterIdentity all
+     * accept a client-supplied directory_id and must not trust it -
+     * independent of route name or frontend assumptions.
+     */
+    private function resolveGatesaleDirectoryOrFail(int $directoryId): UserDirectory
+    {
+        $directory = UserDirectory::find($directoryId);
+
+        if (
+            !$directory
+            || !$directory->is_active
+            || $directory->identityType?->identity_type_name !== 'Visitor'
+            || $directory->visitorType?->visitor_type_name !== 'Gatesale'
+        ) {
+            abort(422, 'Identity could not be confirmed. Please contact the administrator.');
+        }
+
+        return $directory;
+    }
+
+    /**
+     * Closes the gap-lock hole a plain lockForUpdate() re-check can't cover
+     * (it can only lock rows that already exist, so two concurrent calls
+     * that both see zero matching rows could both insert). Cache::lock() is
+     * keyed by directory ONLY (not directory+farm) - two kiosks at
+     * different farms racing to create a visit for the same directory must
+     * serialize against each other too, or the cross-farm check below could
+     * itself be raced. This app already has a working database-backed
+     * cache/lock store (CACHE_STORE=database, cache_locks table), so this
+     * needs no schema change and cannot affect any other visitor type.
+     */
+    private function createGatesaleVisit(UserDirectory $directory, ?string $hostName, ?string $origin, ?string $purpose, ?string $photoBase64, KioskDevice $kiosk): VisitorRequest
+    {
+        return Cache::lock("gatesale-visit-{$directory->directory_id}", 30)
+            ->block(10, function () use ($directory, $hostName, $origin, $purpose, $photoBase64, $kiosk) {
+                $visitorRequest = DB::transaction(function () use ($directory, $hostName, $origin, $purpose, $kiosk) {
+                    // Retained as a second layer of defense on top of the
+                    // Cache::lock above, which is what actually closes the
+                    // insert race.
+                    $existing = $this->activeGatesaleRequestQuery($directory->directory_id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($existing) {
+                        if ($existing->farm_id !== $kiosk->farm_id) {
+                            abort(403, 'This visitor is currently active at a different farm and cannot enter here until that visit ends.');
+                        }
+
+                        return $existing;
+                    }
+
+                    if (!$hostName || !$origin || !$purpose) {
+                        abort(422, 'Host Name, Origin, and Purpose are required.');
+                    }
+
+                    // The directory's face was necessarily already registered
+                    // by this point (either just now, or on an earlier visit) -
+                    // this column must never be left at its PENDING default.
+                    $now = now();
+
+                    return VisitorRequest::create([
+                        'directory_id' => $directory->directory_id,
+                        'farm_id' => $kiosk->farm_id,
+                        'host_name' => $hostName,
+                        'origin' => $origin,
+                        'purpose' => $purpose,
+                        'visit_datetime' => $now,
+                        // Gatesale is always a same-day visit - fixed at
+                        // creation rather than left null, so the expired-
+                        // session scheduler's deadline is 23:00 (an hour
+                        // before it actually runs at midnight) instead of
+                        // the generic 23:59:59 end-of-day fallback.
+                        'departure_datetime' => $now->copy()->setTime(23, 0, 0),
+                        'registration_token' => null,
+                        'face_registration_status' => 'REGISTERED',
+                    ]);
+                });
+
+                // Only run first_entry for a request this call actually just
+                // created - a reused ACTIVE request already has its own
+                // session and must not get a second entry log.
+                if ($visitorRequest->wasRecentlyCreated) {
+                    $this->kioskService->processEntry($visitorRequest->visitor_request_id, 'first_entry', $kiosk, $photoBase64, 'FACE');
+                }
+
+                return $visitorRequest->fresh();
+            });
+    }
+
+    /**
+     * EDIT DETAILS save. Only the visitor's own contact/profile fields are
+     * editable here - directory_id/identity_type_id/visitor_type_id can
+     * never be changed through this endpoint. Never creates a request or
+     * session; the frontend re-shows "Is this you?" from the response and
+     * still requires an explicit YES.
+     */
+    public function gatesaleUpdateDetails(Request $request)
+    {
+        $directory = $this->resolveGatesaleDirectoryOrFail((int) $request->input('directory_id'));
+
+        $directory->update([
+            'full_name' => $request->input('full_name', $directory->full_name),
+            'email' => $request->input('email'),
+            'phone' => $request->input('phone'),
+            'company' => $request->input('company'),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'directory' => [
+                'directory_id' => $directory->directory_id,
+                'full_name' => $directory->full_name,
+                'phone' => $directory->phone,
+                'email' => $directory->email,
+                'company' => $directory->company,
+            ],
+        ]);
+    }
+
+    /**
+     * Called when the visitor presses YES on "Is this you?" or Continues
+     * past a fresh registration's visit-details step - both cases already
+     * know their directory_id and just need Host/Origin/Purpose (+ photo).
+     * An ACTIVE request is re-verified server-side regardless of what the
+     * client believes (defense against a double-submit race).
+     */
+    public function gatesaleCreateVisit(Request $request)
+    {
+        $kiosk = $request->attributes->get('kiosk');
+        $directory = $this->resolveGatesaleDirectoryOrFail((int) $request->input('directory_id'));
+
+        $visitorRequest = $this->createGatesaleVisit(
+            $directory,
+            $request->input('host_name'),
+            $request->input('origin'),
+            $request->input('purpose'),
+            $request->input('photo'),
+            $kiosk
+        );
+
+        return $this->buildRecognitionResponse($visitorRequest, 'gatesale_match', $directory, $kiosk);
+    }
+
+    /**
+     * Identity registration ONLY - no visitor_request/session/entry_log is
+     * created here. Host/Origin/Purpose belong to the separate Visit
+     * Details step (gatesaleCreateVisit) that follows a successful
+     * registration. Re-checks FaceMatchingService first so a genuine
+     * re-scan (flaky first attempt, etc) never creates a duplicate
+     * directory/face_profile - directory+face_profile creation is one
+     * transaction so a failure at either step leaves zero partial rows.
+     */
+    public function gatesaleRegisterIdentity(Request $request)
+    {
+        $kiosk = $request->attributes->get('kiosk');
+        $visitorType = $request->input('visitor_type');
+        $fullName = $request->input('full_name');
+        $company = $request->input('company');
+        $descriptor = $request->input('descriptor');
+        $email = $request->input('email');
+        $phone = $request->input('phone');
+
+        // Only Gatesale is implemented in this phase - Truck is a
+        // selectable option reserved for future implementation.
+        if ($visitorType !== 'Gatesale') {
+            return response()->json([
+                'success' => false,
+                'message' => 'This visitor type is not yet available.',
+            ], 422);
+        }
+
+        if (!$fullName || !$company || !is_array($descriptor) || empty($descriptor)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Full Name, Company, and a face capture are required.',
+            ], 422);
+        }
+
+        $match = $this->faceMatchingService->findMatch($descriptor);
+        if ($match) {
+            $matchedDirectory = $match->directory;
+
+            if ($matchedDirectory->identityType?->identity_type_name === 'Visitor' && $matchedDirectory->visitorType?->visitor_type_name === 'Gatesale') {
+                return $this->handleGatesaleRecognition($matchedDirectory, $kiosk);
+            }
+
+            return response()->json([
+                'success' => false,
+                'type' => 'identity_not_supported',
+                'message' => 'Identity could not be confirmed. Please contact the administrator.',
+            ], 422);
+        }
+
+        return DB::transaction(function () use ($fullName, $email, $phone, $company, $descriptor) {
+            $directory = UserDirectory::create([
+                'identity_type_id' => IdentityType::where('identity_type_name', 'Visitor')->value('identity_type_id'),
+                'visitor_type_id' => VisitorType::where('visitor_type_name', 'Gatesale')->value('visitor_type_id'),
+                'person_reference' => $email ?: ($phone ?: ('GATESALE-' . Str::upper(Str::random(8)))),
+                'first_name' => $fullName,
+                'last_name' => '',
+                'full_name' => $fullName,
+                'email' => $email,
+                'phone' => $phone,
+                'company' => $company,
+            ]);
+
+            FaceProfile::create([
+                'directory_id' => $directory->directory_id,
+                'embedding' => $descriptor,
+                'face_version' => '1.0',
+                'is_active' => true,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'directory' => [
+                    'directory_id' => $directory->directory_id,
+                    'full_name' => $directory->full_name,
+                    'phone' => $directory->phone,
+                    'email' => $directory->email,
+                    'company' => $directory->company,
+                ],
+            ]);
+        });
     }
 
     /**

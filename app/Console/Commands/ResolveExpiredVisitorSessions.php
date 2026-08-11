@@ -25,6 +25,7 @@ class ResolveExpiredVisitorSessions extends Command
         // idempotent - once a request is resolved to INCOMPLETE/COMPLETED_AUTO
         // (or was already COMPLETED), it is never selected again.
         VisitorRequest::where('request_status', 'ACTIVE')
+            ->with('directory.visitorType')
             ->chunkById(100, function ($visitorRequests) use ($now, $sheetWriter, &$resolved) {
                 foreach ($visitorRequests as $visitorRequest) {
                     if ($this->resolveIfExpired($visitorRequest, $now, $sheetWriter)) {
@@ -131,7 +132,7 @@ class ResolveExpiredVisitorSessions extends Command
 
         $this->logResolution($visitorRequest, $previousRequestStatus, 'COMPLETED_AUTO', $previousSessionStatus, 'COMPLETED_AUTO', 'OUTSIDE_AUTO_COMPLETED');
 
-        if (!$sheetWriter) {
+        if (!$sheetWriter || $visitorRequest->isGatesale()) {
             return;
         }
 

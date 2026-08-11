@@ -114,7 +114,7 @@ class VisitorKioskService
                 'datetime' => now(),
             ]);
 
-            if ($this->sheetWriter) {
+            if ($this->sheetWriter && !$visitorRequest->isGatesale()) {
                 try {
                     $this->sheetWriter->appendTimeIn($entryLog);
                 } catch (\Throwable $e) {
@@ -207,7 +207,7 @@ class VisitorKioskService
                 'datetime' => now(),
             ]);
 
-            if ($this->sheetWriter) {
+            if ($this->sheetWriter && !$visitorRequest->isGatesale()) {
                 try {
                     $this->sheetWriter->appendTimeOut($exitLog);
                 } catch (\Throwable $e) {

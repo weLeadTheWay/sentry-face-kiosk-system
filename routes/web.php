@@ -26,6 +26,9 @@ Route::middleware('kiosk.auth')->group(function () {
     Route::get('/kiosk/{kiosk}/verify-token', [\App\Http\Controllers\Kiosk\KioskController::class, 'verifyToken'])->name('kiosk.verify-token');
     Route::post('/kiosk/{kiosk}/recognize', [\App\Http\Controllers\Kiosk\KioskController::class, 'recognize'])->name('kiosk.recognize');
     Route::post('/kiosk/{kiosk}/entry', [\App\Http\Controllers\Kiosk\KioskController::class, 'entry'])->name('kiosk.entry');
+    Route::post('/kiosk/{kiosk}/gatesale/update-details', [\App\Http\Controllers\Kiosk\KioskController::class, 'gatesaleUpdateDetails'])->name('kiosk.gatesale.update-details');
+    Route::post('/kiosk/{kiosk}/gatesale/create-visit', [\App\Http\Controllers\Kiosk\KioskController::class, 'gatesaleCreateVisit'])->name('kiosk.gatesale.create-visit');
+    Route::post('/kiosk/{kiosk}/gatesale/register-identity', [\App\Http\Controllers\Kiosk\KioskController::class, 'gatesaleRegisterIdentity'])->name('kiosk.gatesale.register-identity');
 });
 
 Route::middleware('auth')->group(function () {

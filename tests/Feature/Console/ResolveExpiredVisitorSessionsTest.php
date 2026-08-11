@@ -9,6 +9,7 @@ use App\Models\UserDirectory;
 use App\Models\VisitorEntryLog;
 use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
+use App\Models\VisitorType;
 use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -22,12 +23,14 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
     private FarmList $farm;
     private KioskDevice $kiosk;
     private UserDirectory $directory;
+    private UserDirectory $gatesaleDirectory;
 
     protected function setUp(): void
     {
         parent::setUp();
 
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
+        $gatesaleType = VisitorType::firstOrCreate(['visitor_type_name' => 'Gatesale']);
         $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
         $this->kiosk = KioskDevice::create([
             'farm_id' => $this->farm->farm_id,
@@ -43,6 +46,17 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
             'last_name' => 'Dela Cruz',
             'full_name' => 'Juan Dela Cruz',
             'email' => $email,
+        ]);
+
+        $gatesaleEmail = 'gatesale-expired+' . uniqid() . '@example.com';
+        $this->gatesaleDirectory = UserDirectory::create([
+            'identity_type_id' => $identityType->identity_type_id,
+            'visitor_type_id' => $gatesaleType->visitor_type_id,
+            'person_reference' => $gatesaleEmail,
+            'first_name' => 'Maria',
+            'last_name' => 'Santos',
+            'full_name' => 'Maria Santos',
+            'email' => $gatesaleEmail,
         ]);
     }
 
@@ -301,5 +315,47 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
 
         $this->assertEquals('Completed', $oldSession->fresh()->session_status, 'the old session must not be touched');
         $this->assertEquals('COMPLETED_AUTO', $newSession->fresh()->session_status);
+    }
+
+    // ---- Test 12: Gatesale Outside+expired auto-completes without a Sheets write ----
+    public function test_gatesale_outside_session_auto_completes_without_google_sheets_write(): void
+    {
+        $mock = Mockery::mock(VisitorSheetWriter::class);
+        $mock->shouldReceive('appendTimeOut')->never();
+        $this->app->instance(VisitorSheetWriter::class, $mock);
+
+        $visitorRequest = $this->makeVisitorRequest([
+            'directory_id' => $this->gatesaleDirectory->directory_id,
+            'visitor_id' => null,
+            'registration_token' => null,
+        ]);
+        $session = $this->makeSession($visitorRequest, 'Outside');
+        $this->makeEntryLog($session, 'Temporary Exit', 'OUT', now()->subDay()->setTime(15, 0));
+
+        $this->artisan('visitor:resolve-expired-sessions')->assertExitCode(0);
+
+        $this->assertEquals('COMPLETED_AUTO', $visitorRequest->fresh()->request_status);
+        $this->assertEquals('COMPLETED_AUTO', $session->fresh()->session_status);
+    }
+
+    // ---- Test 13: Gatesale Inside+expired resolves to INCOMPLETE, still no Sheets write ----
+    public function test_gatesale_inside_session_resolves_incomplete_without_google_sheets_write(): void
+    {
+        $mock = Mockery::mock(VisitorSheetWriter::class);
+        $mock->shouldReceive('appendTimeOut')->never();
+        $this->app->instance(VisitorSheetWriter::class, $mock);
+
+        $visitorRequest = $this->makeVisitorRequest([
+            'directory_id' => $this->gatesaleDirectory->directory_id,
+            'visitor_id' => null,
+            'registration_token' => null,
+        ]);
+        $session = $this->makeSession($visitorRequest, 'Inside');
+        $this->makeEntryLog($session, 'First Entry', 'IN', $session->first_in);
+
+        $this->artisan('visitor:resolve-expired-sessions')->assertExitCode(0);
+
+        $this->assertEquals('INCOMPLETE', $visitorRequest->fresh()->request_status);
+        $this->assertEquals('INCOMPLETE', $session->fresh()->session_status);
     }
 }

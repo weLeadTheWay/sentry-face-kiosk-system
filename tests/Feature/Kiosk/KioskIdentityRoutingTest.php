@@ -133,7 +133,7 @@ class KioskIdentityRoutingTest extends TestCase
         $this->assertNoNewDomainRows();
     }
 
-    public function test_3_gatesale_is_detected_and_placeholder_creates_no_rows(): void
+    public function test_3_gatesale_is_routed_to_identity_confirmation_creates_no_rows(): void
     {
         $this->makeDirectoryWithFace(0.30, [
             'visitor_type_id' => $this->gatesaleType->visitor_type_id,
@@ -141,7 +141,7 @@ class KioskIdentityRoutingTest extends TestCase
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.30)]);
 
-        $response->assertOk()->assertJson(['success' => false, 'type' => 'gatesale_detected']);
+        $response->assertOk()->assertJson(['success' => false, 'type' => 'gatesale_confirm_identity']);
         $this->assertNoNewDomainRows();
     }
 
