@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Kiosk;
 
 use App\Http\Controllers\Controller;
 use App\Models\KioskDevice;
+use App\Models\UserDirectory;
 use App\Models\VisitorRequest;
 use App\Services\Kiosk\VisitorKioskService;
 use App\Services\Face\FaceMatchingService;
@@ -50,6 +51,12 @@ class KioskController extends Controller
             }
 
             $directory = $match->directory;
+
+            $identityResponse = $this->routeByIdentity($directory);
+            if ($identityResponse !== null) {
+                return $identityResponse;
+            }
+
             $visitorRequest = $this->pickBestActiveRequest(
                 VisitorRequest::where('directory_id', $directory->directory_id)->activeToday(),
                 $kiosk->farm_id
@@ -91,6 +98,71 @@ class KioskController extends Controller
             'success' => false,
             'message' => 'Missing descriptor or QR value',
         ], 400);
+    }
+
+    /**
+     * Employee/Gatesale/Truck aren't implemented yet - short-circuit them
+     * into a placeholder response before any VisitorRequest lookup runs, so
+     * zero rows are ever touched for those identities. A null/unrecognized
+     * visitor_type_id (e.g. a legacy directory row predating this field)
+     * intentionally falls through to the existing Visitor-with-Approval path
+     * below, matching current behavior exactly.
+     */
+    /**
+     * Driven by identity_type_name / visitor_type_name rather than the raw
+     * foreign key IDs - the IDs are only stable because a seeder inserts
+     * Employee/Visitor/Gatesale/Truck in a fixed order in every real
+     * environment, but nothing enforces that order at the schema level (a
+     * fresh RefreshDatabase test DB with no seeder run, for example, would
+     * assign different auto-increment IDs). Names are the actual contract.
+     */
+    private function routeByIdentity(UserDirectory $directory): ?\Illuminate\Http\JsonResponse
+    {
+        $identityTypeName = $directory->identityType?->identity_type_name;
+
+        if ($identityTypeName === 'Employee') {
+            return response()->json([
+                'success' => false,
+                'type' => 'employee_detected',
+                'message' => 'Employee access is not yet available.',
+            ]);
+        }
+
+        if ($identityTypeName !== 'Visitor') {
+            return response()->json([
+                'success' => false,
+                'type' => 'identity_not_supported',
+                'message' => 'This access type is not yet supported.',
+            ]);
+        }
+
+        $visitorTypeName = $directory->visitorType?->visitor_type_name;
+
+        if ($visitorTypeName === 'Gatesale') {
+            return response()->json([
+                'success' => false,
+                'type' => 'gatesale_detected',
+                'message' => 'Gatesale access flow is not yet available.',
+            ]);
+        }
+
+        if ($visitorTypeName === 'Truck') {
+            return response()->json([
+                'success' => false,
+                'type' => 'truck_detected',
+                'message' => 'Truck / Delivery access flow is not yet available.',
+            ]);
+        }
+
+        if ($visitorTypeName === 'Visitor' || is_null($directory->visitor_type_id)) {
+            return null;
+        }
+
+        return response()->json([
+            'success' => false,
+            'type' => 'visitor_type_not_supported',
+            'message' => 'This visitor type is not yet supported.',
+        ]);
     }
 
     /**

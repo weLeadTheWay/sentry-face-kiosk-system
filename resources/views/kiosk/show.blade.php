@@ -631,7 +631,18 @@
                 return;
             }
 
+            if (['employee_detected', 'gatesale_detected', 'truck_detected', 'identity_not_supported', 'visitor_type_not_supported'].includes(result.type)) {
+                updateStatus(result.message, 'info');
+                showActionButtons(null);
+                setTimeout(() => finishInteraction(), 3000);
+                return;
+            }
+
             updateStatus(result.message || 'Not recognized.', 'error');
+
+            if (result.type === 'face_not_found') {
+                showRegisterVisitorPlaceholder();
+            }
 
             if (authMethod === 'FACE') {
                 faceFailStreak++;
@@ -639,6 +650,22 @@
                     enterQrScanMode();
                 }
             }
+        }
+
+        // Placeholder only (Phase 1) - creates no record and starts no
+        // registration process. Wired up properly in a future phase.
+        function showRegisterVisitorPlaceholder() {
+            document.getElementById('action-buttons').innerHTML =
+                '<button class="btn btn-secondary" onclick="registerVisitorPlaceholder()">Registration</button>';
+        }
+
+        function registerVisitorPlaceholder() {
+            updateStatus(
+                'Registration for Gatesale and Truck / Delivery visitors will be available in an upcoming update.',
+                'info'
+            );
+
+            document.getElementById('action-buttons').innerHTML = '';
         }
 
         initialize();
