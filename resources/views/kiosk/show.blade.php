@@ -829,7 +829,9 @@
             document.getElementById('gatesale-register-step').style.display = 'none';
             document.getElementById('gatesale-host-name').value = '';
             document.getElementById('gatesale-origin').value = '';
-            document.getElementById('gatesale-purpose').value = '';
+            // Gatesale visitors are usually here to pick up eggs - a
+            // sensible, editable default rather than an empty field.
+            document.getElementById('gatesale-purpose').value = 'Pickup eggs';
             document.getElementById('gatesale-visit-banner').style.display = showBanner ? 'block' : 'none';
             document.getElementById('gatesale-visit-step').style.display = 'block';
             showView('gatesale-view');
