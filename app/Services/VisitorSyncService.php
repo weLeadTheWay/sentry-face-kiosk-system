@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\VisitorRequest;
 use App\Models\UserDirectory;
 use App\Models\IdentityType;
+use App\Models\VisitorType;
 use Carbon\Carbon;
 use Illuminate\Support\Str;
 
@@ -49,7 +50,15 @@ class VisitorSyncService
             ];
         }
 
-        $directory = $this->resolveDirectory($data, $visitorIdentityType->identity_type_id);
+        $visitorType = VisitorType::where('visitor_type_name', 'Visitor')->first();
+        if (!$visitorType) {
+            return [
+                'success' => false,
+                'message' => 'Visitor type not found in system.',
+            ];
+        }
+
+        $directory = $this->resolveDirectory($data, $visitorIdentityType->identity_type_id, $visitorType->visitor_type_id);
 
         $registrationToken = 'REG_' . Str::upper(Str::random(8));
         $visitorRequest = VisitorRequest::create([
@@ -86,8 +95,13 @@ class VisitorSyncService
      * always creates a new directory - identity must never be merged on a
      * single field alone. Face Registration later resolves true duplicates
      * via the face-match confirmation workflow.
+     *
+     * visitor_type_id is only ever set on a NEWLY created directory - an
+     * existing (reused) directory is never modified by this method, so an
+     * admin's manual correction elsewhere is never silently overwritten by
+     * a later sync call.
      */
-    private function resolveDirectory(array $data, int $identityTypeId): UserDirectory
+    private function resolveDirectory(array $data, int $identityTypeId, int $visitorTypeId): UserDirectory
     {
         $fullName = $this->buildFullName($data);
         $email = trim($data['email']);
@@ -102,6 +116,7 @@ class VisitorSyncService
 
         return UserDirectory::create([
             'identity_type_id' => $identityTypeId,
+            'visitor_type_id' => $visitorTypeId,
             'first_name' => $data['first_name'] ?? 'Unknown',
             'middle_name' => $data['middle_name'] ?? null,
             'last_name' => $data['last_name'] ?? 'Visitor',
