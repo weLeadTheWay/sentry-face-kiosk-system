@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use App\Traits\Auditable;
 
@@ -65,5 +66,16 @@ class UserDirectory extends Model
     public function visitorRequests(): HasMany
     {
         return $this->hasMany(VisitorRequest::class, 'directory_id', 'directory_id');
+    }
+
+    /**
+     * New normalized visitor-specific data (Step 1 of the ERD restructure).
+     * This is initially just a synchronized copy - visitor_type_id/company/
+     * plate_no on this model remain the application's source of truth until
+     * a later step migrates each read/write path over to visitor_profile.
+     */
+    public function visitorProfile(): HasOne
+    {
+        return $this->hasOne(VisitorProfile::class, 'directory_id', 'directory_id');
     }
 }
