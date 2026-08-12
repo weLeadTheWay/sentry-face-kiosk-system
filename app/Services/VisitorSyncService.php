@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\VisitorRequest;
 use App\Models\UserDirectory;
+use App\Models\VisitorProfile;
 use App\Models\IdentityType;
 use App\Models\VisitorType;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class VisitorSyncService
@@ -96,10 +98,10 @@ class VisitorSyncService
      * single field alone. Face Registration later resolves true duplicates
      * via the face-match confirmation workflow.
      *
-     * visitor_type_id is only ever set on a NEWLY created directory - an
-     * existing (reused) directory is never modified by this method, so an
-     * admin's manual correction elsewhere is never silently overwritten by
-     * a later sync call.
+     * visitor_type_id is only ever set (on visitor_profile, see below) for a
+     * NEWLY created directory - an existing (reused) directory is never
+     * modified by this method, so an admin's manual correction elsewhere is
+     * never silently overwritten by a later sync call.
      */
     private function resolveDirectory(array $data, int $identityTypeId, int $visitorTypeId): UserDirectory
     {
@@ -114,16 +116,27 @@ class VisitorSyncService
             return $existing;
         }
 
-        return UserDirectory::create([
-            'identity_type_id' => $identityTypeId,
-            'visitor_type_id' => $visitorTypeId,
-            'first_name' => $data['first_name'] ?? 'Unknown',
-            'middle_name' => $data['middle_name'] ?? null,
-            'last_name' => $data['last_name'] ?? 'Visitor',
-            'full_name' => $fullName,
-            'email' => $email,
-            'person_reference' => $email,
-        ]);
+        // visitor_type_id lives on visitor_profile now, not user_directory -
+        // both creates are wrapped together so a failure at either step
+        // never leaves an orphaned directory with no profile.
+        return DB::transaction(function () use ($data, $identityTypeId, $visitorTypeId, $fullName, $email) {
+            $directory = UserDirectory::create([
+                'identity_type_id' => $identityTypeId,
+                'first_name' => $data['first_name'] ?? 'Unknown',
+                'middle_name' => $data['middle_name'] ?? null,
+                'last_name' => $data['last_name'] ?? 'Visitor',
+                'full_name' => $fullName,
+                'email' => $email,
+                'person_reference' => $email,
+            ]);
+
+            VisitorProfile::create([
+                'directory_id' => $directory->directory_id,
+                'visitor_type_id' => $visitorTypeId,
+            ]);
+
+            return $directory;
+        });
     }
 
     private function buildFullName(array $data): string

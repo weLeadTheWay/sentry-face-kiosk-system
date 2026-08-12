@@ -8,6 +8,7 @@ use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
 use App\Models\VisitorEntryLog;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
 use App\Models\VisitorType;
@@ -58,18 +59,35 @@ class KioskIdentityRoutingTest extends TestCase
         return array_fill(0, 128, $seed);
     }
 
+    /**
+     * visitor_type_id now lives on visitor_profile, not user_directory - a
+     * caller passing `visitor_type_id => null` (Employee/legacy-null cases)
+     * gets no profile at all, matching a directory that was never
+     * classified as a visitor.
+     */
     private function makeDirectoryWithFace(float $descriptorSeed, array $overrides = []): UserDirectory
     {
+        $visitorTypeId = array_key_exists('visitor_type_id', $overrides)
+            ? $overrides['visitor_type_id']
+            : $this->visitorType->visitor_type_id;
+        unset($overrides['visitor_type_id']);
+
         $email = 'visitor+' . uniqid() . '@example.com';
         $directory = UserDirectory::create(array_merge([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->visitorType->visitor_type_id,
             'person_reference' => $email,
             'first_name' => 'Juan',
             'last_name' => 'Dela Cruz',
             'full_name' => 'Juan Dela Cruz',
             'email' => $email,
         ], $overrides));
+
+        if ($visitorTypeId !== null) {
+            VisitorProfile::create([
+                'directory_id' => $directory->directory_id,
+                'visitor_type_id' => $visitorTypeId,
+            ]);
+        }
 
         FaceProfile::create([
             'directory_id' => $directory->directory_id,

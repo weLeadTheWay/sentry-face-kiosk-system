@@ -7,6 +7,7 @@ use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
 use App\Models\VisitorEntryLog;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
 use App\Models\VisitorType;
@@ -51,12 +52,15 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
         $gatesaleEmail = 'gatesale-expired+' . uniqid() . '@example.com';
         $this->gatesaleDirectory = UserDirectory::create([
             'identity_type_id' => $identityType->identity_type_id,
-            'visitor_type_id' => $gatesaleType->visitor_type_id,
             'person_reference' => $gatesaleEmail,
             'first_name' => 'Maria',
             'last_name' => 'Santos',
             'full_name' => 'Maria Santos',
             'email' => $gatesaleEmail,
+        ]);
+        VisitorProfile::create([
+            'directory_id' => $this->gatesaleDirectory->directory_id,
+            'visitor_type_id' => $gatesaleType->visitor_type_id,
         ]);
     }
 

@@ -5,6 +5,7 @@ namespace Tests\Unit;
 use App\Models\FarmList;
 use App\Models\IdentityType;
 use App\Models\UserDirectory;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorType;
 use App\Services\FarmResolver;
@@ -173,26 +174,31 @@ class VisitorSyncServiceTest extends TestCase
 
     public function test_new_directory_gets_visitor_type_id_set(): void
     {
+        // visitor_type_id lives on visitor_profile now, not user_directory -
+        // relocated here to match, not weakened (see Step 2 of the ERD
+        // restructure).
         $result = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'VIS-VTYPE']));
 
         $directory = UserDirectory::find($result['visitor_request']->directory_id);
-        $this->assertEquals($this->visitorType->visitor_type_id, $directory->visitor_type_id);
-        $this->assertEquals('Visitor', $directory->visitorType->visitor_type_name);
+        $this->assertEquals($this->visitorType->visitor_type_id, $directory->visitorProfile->visitor_type_id);
+        $this->assertEquals('Visitor', $directory->visitorProfile->visitorType->visitor_type_name);
     }
 
     public function test_reused_existing_directory_is_not_modified_by_visitor_type_assignment(): void
     {
         // Same name+email on both syncs reuses the same directory (Case 1).
-        // If that existing directory's visitor_type_id was ever manually
-        // changed by an admin, a later sync call must never silently
-        // overwrite it back.
+        // If that existing directory's visitor_profile.visitor_type_id was
+        // ever manually changed by an admin, a later sync call must never
+        // silently overwrite it back - and must never create a second
+        // profile for the reused directory either.
         $first = $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'VIS-REUSE-1']));
         $directory = UserDirectory::find($first['visitor_request']->directory_id);
-        $directory->update(['visitor_type_id' => null]);
+        $directory->visitorProfile->update(['visitor_type_id' => null]);
 
         $this->service->syncApprovedRequest($this->payload(['visitor_id' => 'VIS-REUSE-2']));
 
-        $this->assertNull($directory->fresh()->visitor_type_id);
+        $this->assertNull($directory->visitorProfile->fresh()->visitor_type_id);
+        $this->assertEquals(1, VisitorProfile::where('directory_id', $directory->directory_id)->count());
     }
 
     public function test_missing_visitor_type_fails_sync_without_creating_any_rows(): void
@@ -204,5 +210,6 @@ class VisitorSyncServiceTest extends TestCase
         $this->assertFalse($result['success']);
         $this->assertEquals(0, UserDirectory::count());
         $this->assertEquals(0, VisitorRequest::count());
+        $this->assertEquals(0, VisitorProfile::count());
     }
 }

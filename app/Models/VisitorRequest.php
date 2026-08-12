@@ -88,12 +88,12 @@ class VisitorRequest extends Model
 
     public function isGatesale(): bool
     {
-        return $this->directory?->visitorType?->visitor_type_name === 'Gatesale';
+        return $this->directory?->visitorProfile?->visitorType?->visitor_type_name === 'Gatesale';
     }
 
     public function isTruck(): bool
     {
-        return $this->directory?->visitorType?->visitor_type_name === 'Truck';
+        return $this->directory?->visitorProfile?->visitorType?->visitor_type_name === 'Truck';
     }
 
     /**

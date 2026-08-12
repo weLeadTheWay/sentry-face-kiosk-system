@@ -8,6 +8,7 @@ use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
 use App\Models\VisitorEntryLog;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
 use App\Models\VisitorType;
@@ -60,15 +61,19 @@ class KioskGatesaleFlowTest extends TestCase
         $email = 'gatesale+' . uniqid() . '@example.com';
         $directory = UserDirectory::create(array_merge([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->gatesaleType->visitor_type_id,
             'person_reference' => $email,
             'first_name' => 'Maria',
             'last_name' => 'Santos',
             'full_name' => 'Maria Santos',
             'email' => $email,
             'phone' => '09171234567',
-            'company' => 'Acme Traders',
         ], $overrides));
+
+        VisitorProfile::create([
+            'directory_id' => $directory->directory_id,
+            'visitor_type_id' => $this->gatesaleType->visitor_type_id,
+            'company' => 'Acme Traders',
+        ]);
 
         FaceProfile::create([
             'directory_id' => $directory->directory_id,
@@ -374,8 +379,8 @@ class KioskGatesaleFlowTest extends TestCase
         $this->assertEquals('Maria Updated Santos', $directory->full_name);
         $this->assertEquals('updated@example.com', $directory->email);
         $this->assertEquals('09179999999', $directory->phone);
-        $this->assertEquals('New Co', $directory->company);
-        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitor_type_id);
+        $this->assertEquals('New Co', $directory->visitorProfile->company);
+        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitorProfile->visitor_type_id);
         $this->assertEquals($this->visitorIdentityType->identity_type_id, $directory->identity_type_id);
         $this->assertEquals(0, VisitorRequest::count(), 'saving edited details alone must never create a request');
     }
@@ -384,9 +389,12 @@ class KioskGatesaleFlowTest extends TestCase
     {
         $visitorDirectory = UserDirectory::create([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->visitorType->visitor_type_id,
             'person_reference' => 'plain+' . uniqid() . '@example.com',
             'first_name' => 'Plain', 'last_name' => 'Visitor', 'full_name' => 'Plain Visitor',
+        ]);
+        VisitorProfile::create([
+            'directory_id' => $visitorDirectory->directory_id,
+            'visitor_type_id' => $this->visitorType->visitor_type_id,
         ]);
 
         $response = $this->updateDetails([
@@ -437,7 +445,8 @@ class KioskGatesaleFlowTest extends TestCase
         $response->assertOk()->assertJson(['success' => true]);
 
         $directory = UserDirectory::where('full_name', 'Brand New Visitor')->sole();
-        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitor_type_id);
+        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitorProfile->visitor_type_id);
+        $this->assertEquals('New Co', $directory->visitorProfile->company);
         $this->assertEquals($this->visitorIdentityType->identity_type_id, $directory->identity_type_id);
         $this->assertEquals(1, FaceProfile::where('directory_id', $directory->directory_id)->count());
 
@@ -535,9 +544,12 @@ class KioskGatesaleFlowTest extends TestCase
     {
         $visitorDirectory = UserDirectory::create([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->visitorType->visitor_type_id,
             'person_reference' => 'plain+' . uniqid() . '@example.com',
             'first_name' => 'Plain', 'last_name' => 'Visitor', 'full_name' => 'Plain Visitor',
+        ]);
+        $visitorProfile = VisitorProfile::create([
+            'directory_id' => $visitorDirectory->directory_id,
+            'visitor_type_id' => $this->visitorType->visitor_type_id,
         ]);
         FaceProfile::create([
             'directory_id' => $visitorDirectory->directory_id,
@@ -553,8 +565,9 @@ class KioskGatesaleFlowTest extends TestCase
 
         $response->assertStatus(422);
         $this->assertEquals(1, UserDirectory::count());
+        $this->assertEquals(1, VisitorProfile::count(), 'no duplicate/converted profile may be created');
         $this->assertEquals(1, FaceProfile::count());
-        $this->assertEquals($this->visitorType->visitor_type_id, $visitorDirectory->fresh()->visitor_type_id);
+        $this->assertEquals($this->visitorType->visitor_type_id, $visitorProfile->fresh()->visitor_type_id);
     }
 
     public function test_gatesale_full_lifecycle_never_writes_to_google_sheets(): void

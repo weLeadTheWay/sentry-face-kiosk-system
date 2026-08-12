@@ -7,6 +7,7 @@ use App\Models\FaceProfile;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorType;
 use App\Services\Kiosk\VisitorKioskService;
@@ -57,6 +58,7 @@ class KioskController extends Controller
             }
 
             $directory = $match->directory;
+            $directory->loadMissing('visitorProfile.visitorType');
 
             $identityResponse = $this->routeByIdentity($directory, $kiosk);
             if ($identityResponse !== null) {
@@ -142,13 +144,13 @@ class KioskController extends Controller
             ]);
         }
 
-        $visitorTypeName = $directory->visitorType?->visitor_type_name;
+        $visitorTypeName = $directory->visitorProfile?->visitorType?->visitor_type_name;
 
         if ($visitorTypeName === 'Gatesale' || $visitorTypeName === 'Truck') {
             return $this->handleSelfServiceRecognition($directory, $kiosk);
         }
 
-        if ($visitorTypeName === 'Visitor' || is_null($directory->visitor_type_id)) {
+        if ($visitorTypeName === 'Visitor' || is_null($directory->visitorProfile?->visitor_type_id)) {
             return null;
         }
 
@@ -219,9 +221,9 @@ class KioskController extends Controller
             'full_name' => $directory->full_name,
             'phone' => $directory->phone,
             'email' => $directory->email,
-            'company' => $directory->company,
-            'plate_no' => $directory->plate_no,
-            'visitor_type' => $directory->visitorType?->visitor_type_name,
+            'company' => $directory->visitorProfile?->company,
+            'plate_no' => $directory->visitorProfile?->plate_no,
+            'visitor_type' => $directory->visitorProfile?->visitorType?->visitor_type_name,
         ];
     }
 
@@ -244,13 +246,13 @@ class KioskController extends Controller
      */
     private function resolveSelfServiceDirectoryOrFail(int $directoryId): UserDirectory
     {
-        $directory = UserDirectory::find($directoryId);
+        $directory = UserDirectory::with('visitorProfile.visitorType')->find($directoryId);
 
         if (
             !$directory
             || !$directory->is_active
             || $directory->identityType?->identity_type_name !== 'Visitor'
-            || !in_array($directory->visitorType?->visitor_type_name, ['Gatesale', 'Truck'], true)
+            || !in_array($directory->visitorProfile?->visitorType?->visitor_type_name, ['Gatesale', 'Truck'], true)
         ) {
             abort(422, 'Identity could not be confirmed. Please contact the administrator.');
         }
@@ -339,14 +341,17 @@ class KioskController extends Controller
     {
         $directory = $this->resolveSelfServiceDirectoryOrFail((int) $request->input('directory_id'));
 
-        $updates = [
+        $directory->update([
             'full_name' => $request->input('full_name', $directory->full_name),
             'email' => $request->input('email'),
             'phone' => $request->input('phone'),
+        ]);
+
+        $profileUpdates = [
             'company' => $request->input('company'),
         ];
 
-        if ($directory->visitorType?->visitor_type_name === 'Truck') {
+        if ($directory->visitorProfile?->visitorType?->visitor_type_name === 'Truck') {
             $plateNo = $request->input('plate_no');
 
             if (!$plateNo) {
@@ -356,10 +361,10 @@ class KioskController extends Controller
                 ], 422);
             }
 
-            $updates['plate_no'] = $plateNo;
+            $profileUpdates['plate_no'] = $plateNo;
         }
 
-        $directory->update($updates);
+        $directory->visitorProfile?->update($profileUpdates);
 
         return response()->json([
             'success' => true,
@@ -437,7 +442,8 @@ class KioskController extends Controller
         $match = $this->faceMatchingService->findMatch($descriptor);
         if ($match) {
             $matchedDirectory = $match->directory;
-            $matchedVisitorType = $matchedDirectory->visitorType?->visitor_type_name;
+            $matchedDirectory->loadMissing('visitorProfile.visitorType');
+            $matchedVisitorType = $matchedDirectory->visitorProfile?->visitorType?->visitor_type_name;
 
             if ($matchedDirectory->identityType?->identity_type_name === 'Visitor' && in_array($matchedVisitorType, ['Gatesale', 'Truck'], true)) {
                 return $this->handleSelfServiceRecognition($matchedDirectory, $kiosk);
@@ -453,13 +459,17 @@ class KioskController extends Controller
         return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $descriptor) {
             $directory = UserDirectory::create([
                 'identity_type_id' => IdentityType::where('identity_type_name', 'Visitor')->value('identity_type_id'),
-                'visitor_type_id' => VisitorType::where('visitor_type_name', $visitorType)->value('visitor_type_id'),
                 'person_reference' => $email ?: ($phone ?: (strtoupper($visitorType) . '-' . Str::upper(Str::random(8)))),
                 'first_name' => $fullName,
                 'last_name' => '',
                 'full_name' => $fullName,
                 'email' => $email,
                 'phone' => $phone,
+            ]);
+
+            VisitorProfile::create([
+                'directory_id' => $directory->directory_id,
+                'visitor_type_id' => VisitorType::where('visitor_type_name', $visitorType)->value('visitor_type_id'),
                 'company' => $company,
                 'plate_no' => $visitorType === 'Truck' ? $plateNo : null,
             ]);

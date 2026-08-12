@@ -8,6 +8,7 @@ use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
 use App\Models\VisitorEntryLog;
+use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorSession;
 use App\Models\VisitorType;
@@ -65,16 +66,20 @@ class KioskTruckFlowTest extends TestCase
         $email = 'truck+' . uniqid() . '@example.com';
         $directory = UserDirectory::create(array_merge([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->truckType->visitor_type_id,
             'person_reference' => $email,
             'first_name' => 'Pedro',
             'last_name' => 'Reyes',
             'full_name' => 'Pedro Reyes',
             'email' => $email,
             'phone' => '09171234567',
+        ], $overrides));
+
+        VisitorProfile::create([
+            'directory_id' => $directory->directory_id,
+            'visitor_type_id' => $this->truckType->visitor_type_id,
             'company' => 'Reyes Logistics',
             'plate_no' => 'ABC-1234',
-        ], $overrides));
+        ]);
 
         FaceProfile::create([
             'directory_id' => $directory->directory_id,
@@ -153,8 +158,8 @@ class KioskTruckFlowTest extends TestCase
         $this->assertEquals('Truck', $response->json('directory.visitor_type'));
 
         $directory = UserDirectory::where('full_name', 'Brand New Trucker')->sole();
-        $this->assertEquals($this->truckType->visitor_type_id, $directory->visitor_type_id);
-        $this->assertEquals('XYZ-9999', $directory->plate_no);
+        $this->assertEquals($this->truckType->visitor_type_id, $directory->visitorProfile->visitor_type_id);
+        $this->assertEquals('XYZ-9999', $directory->visitorProfile->plate_no);
         $this->assertEquals(1, FaceProfile::where('directory_id', $directory->directory_id)->count());
 
         $this->assertEquals(0, VisitorRequest::count());
@@ -188,8 +193,8 @@ class KioskTruckFlowTest extends TestCase
 
         $response->assertOk()->assertJson(['success' => true]);
         $directory = UserDirectory::where('full_name', 'Gatesale Visitor')->sole();
-        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitor_type_id);
-        $this->assertNull($directory->plate_no);
+        $this->assertEquals($this->gatesaleType->visitor_type_id, $directory->visitorProfile->visitor_type_id);
+        $this->assertNull($directory->visitorProfile->plate_no);
     }
 
     // ---- 6, 8, 9: Visit Details completes the flow, sets REGISTERED, stores photo ----
@@ -288,13 +293,13 @@ class KioskTruckFlowTest extends TestCase
             'full_name' => $directory->full_name,
             'email' => $directory->email,
             'phone' => $directory->phone,
-            'company' => $directory->company,
+            'company' => $directory->visitorProfile->company,
             'plate_no' => 'NEW-5555',
         ]);
 
         $response->assertOk()->assertJson(['success' => true]);
         $this->assertEquals('NEW-5555', $response->json('directory.plate_no'));
-        $this->assertEquals('NEW-5555', $directory->fresh()->plate_no);
+        $this->assertEquals('NEW-5555', $directory->visitorProfile->fresh()->plate_no);
     }
 
     public function test_edit_details_rejects_empty_plate_no_for_truck(): void
@@ -308,7 +313,7 @@ class KioskTruckFlowTest extends TestCase
         ]);
 
         $response->assertStatus(422);
-        $this->assertEquals('ABC-1234', $directory->fresh()->plate_no, 'plate_no must be left untouched when validation fails');
+        $this->assertEquals('ABC-1234', $directory->visitorProfile->fresh()->plate_no, 'plate_no must be left untouched when validation fails');
     }
 
     public function test_edit_details_never_converts_visitor_type(): void
@@ -321,7 +326,7 @@ class KioskTruckFlowTest extends TestCase
             'plate_no' => 'STILL-TRUCK',
         ])->assertOk();
 
-        $this->assertEquals($this->truckType->visitor_type_id, $directory->fresh()->visitor_type_id);
+        $this->assertEquals($this->truckType->visitor_type_id, $directory->visitorProfile->fresh()->visitor_type_id);
     }
 
     // ---- 15: EDIT DETAILS never creates a request by itself ----
@@ -415,9 +420,12 @@ class KioskTruckFlowTest extends TestCase
     {
         $gatesaleDirectory = UserDirectory::create([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->gatesaleType->visitor_type_id,
             'person_reference' => 'gs+' . uniqid() . '@example.com',
             'first_name' => 'Maria', 'last_name' => 'Santos', 'full_name' => 'Maria Santos',
+        ]);
+        VisitorProfile::create([
+            'directory_id' => $gatesaleDirectory->directory_id,
+            'visitor_type_id' => $this->gatesaleType->visitor_type_id,
         ]);
         FaceProfile::create([
             'directory_id' => $gatesaleDirectory->directory_id,
