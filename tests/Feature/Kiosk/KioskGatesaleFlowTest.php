@@ -603,10 +603,13 @@ class KioskGatesaleFlowTest extends TestCase
         $email = 'approved+' . uniqid() . '@example.com';
         $directory = UserDirectory::create([
             'identity_type_id' => $this->visitorIdentityType->identity_type_id,
-            'visitor_type_id' => $this->visitorType->visitor_type_id,
             'person_reference' => $email,
             'first_name' => 'Juan', 'last_name' => 'Dela Cruz', 'full_name' => 'Juan Dela Cruz',
             'email' => $email,
+        ]);
+        VisitorProfile::create([
+            'directory_id' => $directory->directory_id,
+            'visitor_type_id' => $this->visitorType->visitor_type_id,
         ]);
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,

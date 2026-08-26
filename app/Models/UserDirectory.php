@@ -26,10 +26,7 @@ class UserDirectory extends Model
         'full_name',
         'email',
         'phone',
-        'company',
-        'plate_no',
         'employee_no',
-        'visitor_type_id',
         'employee_type_id',
         'is_active',
     ];
@@ -69,10 +66,9 @@ class UserDirectory extends Model
     }
 
     /**
-     * New normalized visitor-specific data (Step 1 of the ERD restructure).
-     * This is initially just a synchronized copy - visitor_type_id/company/
-     * plate_no on this model remain the application's source of truth until
-     * a later step migrates each read/write path over to visitor_profile.
+     * Normalized visitor-specific data (visitor_type_id/company/plate_no).
+     * This is now the sole source of truth for that data - the equivalent
+     * columns on user_directory itself have been removed.
      */
     public function visitorProfile(): HasOne
     {

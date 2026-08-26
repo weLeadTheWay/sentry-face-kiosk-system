@@ -10,10 +10,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 /**
- * Step 1 of the ERD restructure: visitor_profile is a new, additive table.
- * These tests cover only the new model code (relations) - the existing
- * visitor_type_id/company/plate_no columns on UserDirectory itself are
- * untouched and remain covered by the existing Gatesale/Truck test suites.
+ * visitor_profile holds visitor-specific data (visitor_type_id/company/
+ * plate_no) separately from UserDirectory's core identity fields - it is
+ * now the sole source of truth for that data, since the equivalent columns
+ * on UserDirectory itself have been removed (see the ERD restructure).
  */
 class VisitorProfileTest extends TestCase
 {
