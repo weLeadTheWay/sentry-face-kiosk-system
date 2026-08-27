@@ -1,0 +1,15 @@
+<p><a href="{{ route('biosecurity-rules.index') }}" class="ajax-link">&larr; Biosecurity Rules</a></p>
+<div class="content-header"><h2 class="content-title">Add Downtime Matrix Rule</h2></div>
+
+        <div class="table-wrapper" style="max-width: 600px;"><form method="POST" action="{{ route('downtime-matrix.store') }}" class="ajax-form" style="padding: 1.5rem;">@csrf<div class="form-group @error('origin_farm_id') has-error @enderror"><label for="origin_farm_id">Origin Farm *</label><select id="origin_farm_id" name="origin_farm_id" required>@foreach($farms as $f)<option value="{{ $f->farm_id }}">{{ $f->farm_name }}</option>@endforeach</select>@error('origin_farm_id')<div class="error-message">{{ $message }}</div>@enderror</div>
+
+        <div class="form-group @error('destination_farm_id') has-error @enderror"><label for="destination_farm_id">Destination Farm *</label><select id="destination_farm_id" name="destination_farm_id" required>@foreach($farms as $f)<option value="{{ $f->farm_id }}">{{ $f->farm_name }}</option>@endforeach</select>@error('destination_farm_id')<div class="error-message">{{ $message }}</div>@enderror</div>
+
+        <div class="form-group @error('minimum_downtime') has-error @enderror"><label for="minimum_downtime">Minimum Downtime (hours)</label><input type="number" id="minimum_downtime" name="minimum_downtime">@error('minimum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
+
+        <div class="form-group @error('maximum_downtime') has-error @enderror"><label for="maximum_downtime">Maximum Downtime (hours)</label><input type="number" id="maximum_downtime" name="maximum_downtime">@error('maximum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
+
+        <div class="form-group"><label><input type="hidden" name="is_active" value="0"><input type="checkbox" name="is_active" value="1" checked> Active</label></div>
+
+        <div class="form-actions"><button type="submit" class="btn">Create</button><a href="{{ route('downtime-matrix.index') }}" class="btn btn-secondary ajax-link">Cancel</a></div></form>
+</div>

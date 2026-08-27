@@ -1,9 +1,10 @@
+<p><a href="{{ route('biosecurity-rules.index') }}" class="ajax-link">&larr; Biosecurity Rules</a></p>
 <div class="content-header">
-    <h2 class="content-title">Edit Biosecurity Rule</h2>
+    <h2 class="content-title">Edit Downtime Matrix Rule</h2>
 </div>
 
 <div class="table-wrapper" style="max-width: 600px;">
-    <form method="POST" action="{{ route('biosecurity-rules.update', $biosecurity_rule) }}" class="ajax-form" style="padding: 1.5rem;">
+    <form method="POST" action="{{ route('downtime-matrix.update', $downtime_matrix) }}" class="ajax-form" style="padding: 1.5rem;">
         @csrf
         @method('PUT')
 
@@ -11,7 +12,7 @@
             <label for="origin_farm_id">Origin Farm *</label>
             <select id="origin_farm_id" name="origin_farm_id" required>
                 @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $biosecurity_rule->origin_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $downtime_matrix->origin_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
                 @endforeach
             </select>
             @error('origin_farm_id')
@@ -23,7 +24,7 @@
             <label for="destination_farm_id">Destination Farm *</label>
             <select id="destination_farm_id" name="destination_farm_id" required>
                 @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $biosecurity_rule->destination_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $downtime_matrix->destination_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
                 @endforeach
             </select>
             @error('destination_farm_id')
@@ -31,17 +32,9 @@
             @enderror
         </div>
 
-        <div class="form-group @error('area_type') has-error @enderror">
-            <label for="area_type">Area Type</label>
-            <input type="text" id="area_type" name="area_type" value="{{ old('area_type', $biosecurity_rule->area_type) }}">
-            @error('area_type')
-                <div class="error-message">{{ $message }}</div>
-            @enderror
-        </div>
-
         <div class="form-group @error('minimum_downtime') has-error @enderror">
             <label for="minimum_downtime">Minimum Downtime (hours)</label>
-            <input type="number" id="minimum_downtime" name="minimum_downtime" value="{{ old('minimum_downtime', $biosecurity_rule->minimum_downtime) }}">
+            <input type="number" id="minimum_downtime" name="minimum_downtime" value="{{ old('minimum_downtime', $downtime_matrix->minimum_downtime) }}">
             @error('minimum_downtime')
                 <div class="error-message">{{ $message }}</div>
             @enderror
@@ -49,16 +42,8 @@
 
         <div class="form-group @error('maximum_downtime') has-error @enderror">
             <label for="maximum_downtime">Maximum Downtime (hours)</label>
-            <input type="number" id="maximum_downtime" name="maximum_downtime" value="{{ old('maximum_downtime', $biosecurity_rule->maximum_downtime) }}">
+            <input type="number" id="maximum_downtime" name="maximum_downtime" value="{{ old('maximum_downtime', $downtime_matrix->maximum_downtime) }}">
             @error('maximum_downtime')
-                <div class="error-message">{{ $message }}</div>
-            @enderror
-        </div>
-
-        <div class="form-group @error('access_level') has-error @enderror">
-            <label for="access_level">Access Level *</label>
-            <input type="text" id="access_level" name="access_level" value="{{ old('access_level', $biosecurity_rule->access_level) }}" required>
-            @error('access_level')
                 <div class="error-message">{{ $message }}</div>
             @enderror
         </div>
@@ -66,14 +51,14 @@
         <div class="form-group">
             <label>
                 <input type="hidden" name="is_active" value="0">
-                <input type="checkbox" name="is_active" value="1" {{ old('is_active', $biosecurity_rule->is_active) ? 'checked' : '' }}>
+                <input type="checkbox" name="is_active" value="1" {{ old('is_active', $downtime_matrix->is_active) ? 'checked' : '' }}>
                 Active
             </label>
         </div>
 
         <div class="form-actions">
             <button type="submit" class="btn">Update</button>
-            <a href="{{ route('biosecurity-rules.index') }}" class="btn btn-secondary ajax-link">Cancel</a>
+            <a href="{{ route('downtime-matrix.index') }}" class="btn btn-secondary ajax-link">Cancel</a>
         </div>
     </form>
 </div>

@@ -7,21 +7,19 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class BiosecurityRule extends Model
+class DowntimeMatrix extends Model
 {
     use HasFactory, Auditable;
 
-    protected $table = 'biosecurity_rules';
+    protected $table = 'downtime_matrix';
     protected $primaryKey = 'rule_id';
     public $incrementing = true;
 
     protected $fillable = [
         'origin_farm_id',
         'destination_farm_id',
-        'area_type',
         'minimum_downtime',
         'maximum_downtime',
-        'access_level',
         'is_active',
     ];
 

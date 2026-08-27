@@ -44,7 +44,9 @@ Route::middleware('auth')->group(function () {
     Route::post('admin/kiosks/{kiosk}/regenerate-token', [\App\Http\Controllers\Admin\KioskDeviceController::class, 'regenerateToken'])->name('kiosks.regenerate-token')->middleware('permission:kiosks.manage');
     Route::resource('admin/identity-types', \App\Http\Controllers\Admin\IdentityTypeController::class)->middleware('permission:identity_types.manage')->parameter('identity_type', 'identity_type');
     Route::resource('admin/employee-types', \App\Http\Controllers\Admin\EmployeeTypeController::class)->middleware('permission:employee_types.manage')->parameter('employee_type', 'employee_type');
-    Route::resource('admin/biosecurity-rules', \App\Http\Controllers\Admin\BiosecurityRuleController::class)->middleware('permission:biosecurity.manage')->parameter('biosecurity_rule', 'biosecurity_rule');
+    Route::get('admin/biosecurity-rules', [\App\Http\Controllers\Admin\BiosecurityRuleController::class, 'index'])->name('biosecurity-rules.index')->middleware('permission:biosecurity.manage');
+    Route::resource('admin/biosecurity-rules/downtime-matrix', \App\Http\Controllers\Admin\DowntimeMatrixController::class)->middleware('permission:biosecurity.manage')->parameter('downtime_matrix', 'downtime_matrix');
+    Route::resource('admin/biosecurity-rules/downtime-stationary', \App\Http\Controllers\Admin\DowntimeStationaryController::class)->middleware('permission:biosecurity.manage')->parameter('downtime_stationary', 'downtime_stationary');
     Route::resource('admin/roles', \App\Http\Controllers\Admin\RoleController::class)->middleware('permission:roles.manage');
     Route::get('admin/roles/{role}/permissions', [\App\Http\Controllers\Admin\RoleController::class, 'permissions'])->name('roles.permissions')->middleware('permission:roles.manage');
     Route::post('admin/roles/{role}/permissions', [\App\Http\Controllers\Admin\RoleController::class, 'updatePermissions'])->name('roles.updatePermissions')->middleware('permission:roles.manage');

@@ -595,9 +595,27 @@ ACTIVE + Outside with a real OUT log        → COMPLETED_AUTO  (Sheets write, u
 
 **Purpose:** Authenticated back-office CRUD for every piece of reference/configuration data the kiosk-facing modules depend on.
 
-**Responsibilities:** Standard create/read/update/delete for: Farms (`FarmList`), Farm Aliases, Kiosk Devices (+ token regeneration), Identity Types, Employee Types, Biosecurity Rules, Roles (+ permission assignment), Users, and a read-only Audit Log viewer.
+**Responsibilities:** Standard create/read/update/delete for: Farms (`FarmList`), Farm Aliases, Kiosk Devices (+ token regeneration), Identity Types, Employee Types, Biosecurity Rules (main module) with its two submodules Downtime Matrix and Downtime Stationary, Roles (+ permission assignment), Users, and a read-only Audit Log viewer.
 
-**Entry Points:** All under `routes/web.php`, behind the `auth` middleware and a per-resource `permission:<key>` middleware — see the permission table below. All are Laravel resource routes (`Route::resource`) except `roles/{role}/permissions` (GET/POST) and `kiosks/{kiosk}/regenerate-token` (POST).
+**Entry Points:** All under `routes/web.php`, behind the `auth` middleware and a per-resource `permission:<key>` middleware — see the permission table below. All are Laravel resource routes (`Route::resource`) except `roles/{role}/permissions` (GET/POST), `kiosks/{kiosk}/regenerate-token` (POST), and `admin/biosecurity-rules` itself (a plain `GET`-only landing route — see the Biosecurity Rules submodule note below).
+
+**Biosecurity Rules is one module with two submodules, loaded one at a time (not two nested resources shown together):**
+```text
+GET /admin/biosecurity-rules
+   ↓
+BiosecurityRuleController::index — renders a landing partial with two cards/links,
+   "Downtime Matrix" and "Downtime Stationary" — no table data is queried or shown here
+   ↓
+user clicks a card (an .ajax-link, same mechanism as every other admin nav link)
+   ↓
+GET /admin/biosecurity-rules/downtime-matrix        → DowntimeMatrixController (full CRUD)
+   or
+GET /admin/biosecurity-rules/downtime-stationary    → DowntimeStationaryController (full CRUD)
+   ↓
+that submodule's own index/create/edit partials replace #content — the other
+   submodule's table is never fetched or rendered until its own card/link is clicked
+```
+Each submodule's `_index`/`_create`/`_edit` partial carries a "← Biosecurity Rules" link back to the landing page. Both submodule route groups are nested under the `admin/biosecurity-rules/` URI prefix but keep short route names (`downtime-matrix.*`, `downtime-stationary.*`) because Laravel's resource registrar names nested-slash resources from their last URI segment, not the full path.
 
 **Main Flow (identical pattern across every controller in this module):**
 ```text
@@ -623,19 +641,22 @@ Blade partial response — every controller has a private view() helper that ret
 | Kiosk Devices | `KioskDevice` | `kiosks.manage` |
 | Identity Types | `IdentityType` | `identity_types.manage` |
 | Employee Types | `EmployeeType` | `employee_types.manage` |
-| Biosecurity Rules | `BiosecurityRule` | `biosecurity.manage` |
+| Biosecurity Rules (landing/cards only, no data) | — | `biosecurity.manage` |
+| Biosecurity Rules → Downtime Matrix | `DowntimeMatrix` | `biosecurity.manage` (shares the module's one permission) |
+| Biosecurity Rules → Downtime Stationary | `DowntimeStationary` | `biosecurity.manage` (shares the module's one permission) |
 | Roles (+ permissions) | `Role`/`Permission` | `roles.manage` |
 | Users | `User` | `users.manage` |
 | Audit Logs (view only) | `AuditLog` | `audit_logs.view` |
 
 **Dependencies:** `RolePermissionService` (role↔permission sync), `AuthService` (user create/update with password hashing), `AuditLogService` (filtered/paginated log queries).
 
-**Related Modules:** Farms/Farm Aliases feed `Visitor Sync`'s `FarmResolver`. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth. Roles/Permissions/Users feed `Authentication & Authorization`. Biosecurity Rules and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: Biosecurity Rules and Employee Types are modeled and administrable but **no other module currently reads them** (no code path queries `BiosecurityRule` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response).
+**Related Modules:** Farms/Farm Aliases feed `Visitor Sync`'s `FarmResolver`. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth. Roles/Permissions/Users feed `Authentication & Authorization`. Downtime Matrix/Downtime Stationary and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: these are modeled and administrable but **no other module currently reads them** (no code path queries `DowntimeMatrix`/`DowntimeStationary` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response).
 
 **Business Rules:**
 - Every `Store*Request`/`Update*Request`'s `authorize()` independently re-checks the same permission the route middleware already checked — belt-and-suspenders, not a bypass path.
 - Unique constraints enforced at the validation layer mirror DB-level unique columns (`farm_code`, `serial_number`, `role_name`, `user_email`, `identity_type_name`, `employee_type_name`, `alias_text`).
 - `RoleController::updatePermissions` does a full `sync()` (not merge) — submitting an empty `permission_ids` array revokes **all** permissions from that role.
+- The Biosecurity Rules landing page never queries or renders both submodules' data at once — `BiosecurityRuleController::index` returns only the two-card partial with no model query at all; each submodule's own controller (`DowntimeMatrixController`, `DowntimeStationaryController`) is the sole owner of its own listing/CRUD, loaded asynchronously only when its card/link is clicked. Do not merge the two submodules' index queries onto the landing page — that was an explicit request when the module was split.
 
 **Important Files:**
 
@@ -648,9 +669,9 @@ Blade partial response — every controller has a private view() helper that ret
 
 **Configuration:** `config('sentry.pagination')` (`APP_PAGINATION_SIZE` env, default 50) controls every index listing's page size.
 
-**Known Constraints:** No bulk operations (import/export) on any admin resource. No soft-deletes anywhere — `destroy()` is a hard delete (cascades per each migration's FK constraints — e.g. deleting a `FarmList` cascades to `kiosk_device` and `biosecurity_rules`; deleting a `user_directory` row cascades to `visitor_request` and `visitor_profile`).
+**Known Constraints:** No bulk operations (import/export) on any admin resource. No soft-deletes anywhere — `destroy()` is a hard delete (cascades per each migration's FK constraints — e.g. deleting a `FarmList` cascades to `kiosk_device`, `downtime_matrix`, and `downtime_stationary`; deleting a `user_directory` row cascades to `visitor_request` and `visitor_profile`).
 
-**Important Notes for Future Changes:** Do not add a new admin resource without both a `permission:<key>` route guard **and** a matching `authorize()` check in its FormRequests — the existing pattern relies on both being present. If you add a `VisitorType` admin controller (a real gap — see the Self-Service module's Known Constraints), follow this exact same pattern for consistency.
+**Important Notes for Future Changes:** Do not add a new admin resource without both a `permission:<key>` route guard **and** a matching `authorize()` check in its FormRequests — the existing pattern relies on both being present. If you add a `VisitorType` admin controller (a real gap — see the Self-Service module's Known Constraints), follow this exact same pattern for consistency. If a third Biosecurity Rules submodule is ever added, follow the same landing-card + nested-resource-route pattern used for Downtime Matrix/Downtime Stationary rather than adding a third card of unrelated shape.
 
 ---
 
@@ -726,7 +747,7 @@ AuditLog::create([user_id: auth()->id(), action, module: class_basename($this), 
                    old_value_json, new_value_json, ip_address: request()?->ip(), created_at: now()])
 ```
 
-**Data Used:** `audit_logs` table. Every model in `app/Models/` uses this trait **except** `Permission` — `NEEDS VERIFICATION`: confirm `Permission` uses it — and `VisitorType`, `AuditLog` itself, and `ApiLog` (checked directly against the model list: `UserDirectory`, `VisitorProfile`, `VisitorRequest`, `VisitorSession`, `VisitorEntryLog`, `FaceProfile`, `KioskDevice`, `User`, `Role`, `Permission`, `FarmList`, `FarmAlias`, `EmployeeType`, `IdentityType`, `BiosecurityRule` all declare `use Auditable`; `VisitorType`, `AuditLog`, `ApiLog` do not).
+**Data Used:** `audit_logs` table. Every model in `app/Models/` uses this trait **except** `Permission` — `NEEDS VERIFICATION`: confirm `Permission` uses it — and `VisitorType`, `AuditLog` itself, and `ApiLog` (checked directly against the model list: `UserDirectory`, `VisitorProfile`, `VisitorRequest`, `VisitorSession`, `VisitorEntryLog`, `FaceProfile`, `KioskDevice`, `User`, `Role`, `Permission`, `FarmList`, `FarmAlias`, `EmployeeType`, `IdentityType`, `DowntimeMatrix`, `DowntimeStationary` all declare `use Auditable`; `VisitorType`, `AuditLog`, `ApiLog` do not).
 
 **Dependencies:** None external — pure Eloquent event hooks.
 
@@ -875,7 +896,8 @@ employee_type ──┘         │           │        │
 
 farm_list ──┬──▶ farm_aliases
             ├──▶ kiosk_device
-            └──▶ biosecurity_rules (origin_farm_id, destination_farm_id — self-referential via farm_list)
+            ├──▶ downtime_matrix (origin_farm_id, destination_farm_id — self-referential via farm_list; renamed from biosecurity_rules, area_type column dropped)
+            └──▶ downtime_stationary (assigned_farm_id — single FK to farm_list, one row per farm)
 
 (cross-cutting) audit_logs — one row per create/update/delete on any Auditable model, FK to users.user_id (nullable)
 api_logs — one row per Visitor Sync call and per Google Sheets write attempt
@@ -891,7 +913,8 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 - **`visitor_entry_logs`** — Purpose: immutable append-only log of every individual movement event (`First Entry`/`Temporary Exit`/`Return`/`Final Exit`, each with `IN`/`OUT` + timestamp + optional photo). No `updated_at` (`$timestamps = false`). Never updated after creation, only inserted.
 - **`kiosk_device`** — Purpose: one physical tablet, tied to exactly one `farm_id`. `kiosk_token` is the bearer credential for all `kiosk.auth`-gated routes, auto-generated on create, rotatable via admin.
 - **`farm_list`** / **`farm_aliases`** — Purpose: canonical farm records and alternate spellings AppSheet might send; aliases exist specifically to avoid fuzzy matching in `FarmResolver`.
-- **`biosecurity_rules`** — Purpose: modeled (origin/destination farm, downtime window, access level) but **not currently read by any business logic** — reference data ahead of a not-yet-built feature (`NEEDS VERIFICATION`).
+- **`downtime_matrix`** (renamed from `biosecurity_rules` on 2026-08-26; `area_type` column dropped in that same migration; `access_level` column dropped in a follow-up migration the same day) — Purpose: origin→destination farm downtime pairs. Key: `rule_id`. Columns: `origin_farm_id`, `destination_farm_id` (both FK → `farm_list.farm_id`), `minimum_downtime`/`maximum_downtime` (nullable integers), `is_active`. Model: `App\Models\DowntimeMatrix`. **Not currently read by any business logic** — reference data ahead of a not-yet-built feature (`NEEDS VERIFICATION`).
+- **`downtime_stationary`** (new table, 2026-08-26) — Purpose: a fixed min/max downtime window assigned to a single farm (no origin/destination pairing, unlike Downtime Matrix). Key: `rule_id`. Columns: `assigned_farm_id` (FK → `farm_list.farm_id`), `minimum_downtime_hours`/`max_downtime_hours` (`DECIMAL(5,2)`, nullable), `is_active`. Model: `App\Models\DowntimeStationary`. Sibling submodule to Downtime Matrix under the same Biosecurity Rules module/permission. **Not currently read by any business logic**, same as Downtime Matrix (`NEEDS VERIFICATION`).
 - **`role` / `permission` / `role_permissions` / `users`** — Purpose: RBAC. One role per user; permissions are string keys (`resource.action` convention) checked via `User::hasPermission()`.
 - **`audit_logs`** — Purpose: append-only change log, see the Audit Logging module.
 - **`api_logs`** — Purpose: append-only integration call log, shared by Visitor Sync and Google Sheets Integration (both write to the same table, distinguished by `endpoint`).
@@ -932,7 +955,7 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 
 ### Authenticated admin panel (`routes/web.php`, `auth` + `permission:<key>`)
 
-Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/farms`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/biosecurity-rules`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, `admin/farm-aliases`, and `admin/audit-logs` (`index` only — read-only). See §2's Admin Management module for the permission-key mapping.
+Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/farms`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, `admin/farm-aliases`, and `admin/audit-logs` (`index` only — read-only). `admin/biosecurity-rules` is a `GET`-only landing route (`biosecurity-rules.index`, two-card partial, no CRUD of its own); its two submodules are full resource routes nested under it: `admin/biosecurity-rules/downtime-matrix` (route names `downtime-matrix.*`) and `admin/biosecurity-rules/downtime-stationary` (route names `downtime-stationary.*`). See §2's Admin Management module for the permission-key mapping and the submodule load flow.
 
 ### Auth endpoints (`routes/web.php`, public)
 
@@ -1081,6 +1104,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 | Face Matching | `app/Services/Face/FaceMatchingService.php` |
 | Google Sheets Integration | `app/Services/GoogleSheets/GoogleSheetsClient.php`, `app/Services/GoogleSheets/VisitorSheetWriter.php`, `app/Providers/AppServiceProvider.php` |
 | Session Auto-Resolution | `app/Console/Commands/ResolveExpiredVisitorSessions.php`, `routes/console.php` |
+| Biosecurity Rules (Downtime Matrix / Downtime Stationary) | `app/Http/Controllers/Admin/BiosecurityRuleController.php` (landing/cards only), `app/Http/Controllers/Admin/DowntimeMatrixController.php`, `app/Http/Controllers/Admin/DowntimeStationaryController.php`, `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php` |
 | Admin Management | `app/Http/Controllers/Admin/*.php`, `app/Http/Requests/Admin/*.php`, `app/Services/{AuthService,RolePermissionService,AuditLogService}.php` |
 | Authentication & Authorization | `app/Http/Controllers/Auth/LoginController.php`, `app/Services/AuthService.php`, `app/Http/Middleware/CheckPermission.php`, `app/Models/User.php` |
 | Audit Logging | `app/Traits/Auditable.php`, `app/Models/AuditLog.php` |
@@ -1114,7 +1138,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 |---|---|---|---|---|---|---|
 | 1 | Kiosk Self-Service | `VisitorType` rows (Visitor/Gatesale/Truck) have no seeder and no admin CRUD | Must be created manually (DB/tinker) in every environment | New/rebuilt environments will have a non-functional Self-Service and even Sync flow until someone manually inserts these rows | `database/seeders/`, `app/Http/Controllers/Admin/` (absence) | CONFIRMED (absence verified directly) |
 | 2 | Visitor Registration | `visitor_request.qr_url` (from AppSheet) is stored but not rendered/downloaded anywhere — the success page generates its own QR locally from `visitor_id` instead | Column appears write-only in current UI | Possibly dead data, or used by a system outside this codebase | `app/Http/Controllers/Visitor/RegistrationController.php::qrCode`, `resources/views/visitor/success.blade.php` | NEEDS VERIFICATION |
-| 3 | Admin Management | `BiosecurityRule` and `EmployeeType` are fully modeled/administrable but not read by any business logic | Rules can be created but have no runtime effect | Confusing to an admin who expects biosecurity rules to actually gate something; likely intended for a not-yet-built feature | `app/Models/BiosecurityRule.php`, `app/Models/EmployeeType.php` | NEEDS VERIFICATION |
+| 3 | Admin Management | `DowntimeMatrix`, `DowntimeStationary` (the two Biosecurity Rules submodules, formerly the single `BiosecurityRule`/`biosecurity_rules` table) and `EmployeeType` are fully modeled/administrable but not read by any business logic | Rules can be created but have no runtime effect | Confusing to an admin who expects biosecurity rules to actually gate something; likely intended for a not-yet-built feature | `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php`, `app/Models/EmployeeType.php` | NEEDS VERIFICATION |
 | 4 | Kiosk (Employee identity) | `routeByIdentity()` hard-codes a placeholder "not yet available" response for Employee identity type | Employees cannot use the kiosk at all today | Feature gap, not a bug — flagged since Employee-type reference data (EmployeeType) already exists, suggesting this was planned | `app/Http/Controllers/Kiosk/KioskController.php::routeByIdentity` | CONFIRMED (explicit placeholder in code) |
 | 5 | Authentication | `max_login_attempts`/`lockout_duration`/`password_min_length` are defined in `config/sentry.php` but nothing in the codebase reads them | No login throttling/lockout is actually enforced despite config suggesting it should be | A brute-force login attempt is not currently rate-limited by this app | `config/sentry.php`, `app/Http/Controllers/Auth/LoginController.php`, `app/Services/AuthService.php` | NEEDS VERIFICATION (absence of usage confirmed via search; confirm no global throttle middleware applies) |
 | 6 | Kiosk (frontend) | Face/QR recognition libraries are loaded live from external CDNs inside the kiosk Blade view, not vendored/bundled | Kiosk recognition fully depends on CDN + internet availability | A CDN or network outage disables face/QR recognition kiosk-wide even if the Laravel app itself is healthy | `resources/views/kiosk/show.blade.php` | CONFIRMED |
@@ -1208,7 +1232,7 @@ Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gates
 `POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` · `/register/visitor/*` (public) · `/admin/*` (authenticated resource routes) · `/login`, `/logout`
 
 ### Main Data Entities
-`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` · `visitor_session` · `visitor_entry_logs` · `kiosk_device` · `farm_list` / `farm_aliases` · `identity_type` / `employee_type` / `visitor_type` · `biosecurity_rules` · `role` / `permission` / `users` · `audit_logs` / `api_logs`
+`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` · `visitor_session` · `visitor_entry_logs` · `kiosk_device` · `farm_list` / `farm_aliases` · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
 
 ### External Systems
 AppSheet (inbound webhook, one-way) · Google Sheets API (outbound write, one-way) · `face-api.js` + `jsQR` (client-side, CDN-loaded)

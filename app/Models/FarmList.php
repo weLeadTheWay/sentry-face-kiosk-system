@@ -34,13 +34,18 @@ class FarmList extends Model
         return $this->hasMany(KioskDevice::class, 'farm_id', 'farm_id');
     }
 
-    public function originBiosecurityRules(): HasMany
+    public function originDowntimeMatrixRules(): HasMany
     {
-        return $this->hasMany(BiosecurityRule::class, 'origin_farm_id', 'farm_id');
+        return $this->hasMany(DowntimeMatrix::class, 'origin_farm_id', 'farm_id');
     }
 
-    public function destinationBiosecurityRules(): HasMany
+    public function destinationDowntimeMatrixRules(): HasMany
     {
-        return $this->hasMany(BiosecurityRule::class, 'destination_farm_id', 'farm_id');
+        return $this->hasMany(DowntimeMatrix::class, 'destination_farm_id', 'farm_id');
+    }
+
+    public function downtimeStationaryRules(): HasMany
+    {
+        return $this->hasMany(DowntimeStationary::class, 'assigned_farm_id', 'farm_id');
     }
 }
