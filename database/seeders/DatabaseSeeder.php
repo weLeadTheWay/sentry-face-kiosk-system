@@ -21,6 +21,9 @@ class DatabaseSeeder extends Seeder
             RolePermissionSeeder::class,
             IdentityTypeSeeder::class,
             EmployeeTypeSeeder::class,
+            FacilityTypeSeeder::class,
+            FacilityCategorySeeder::class,
+            FacilityListSeeder::class,
             AdminUserSeeder::class,
         ]);
     }
