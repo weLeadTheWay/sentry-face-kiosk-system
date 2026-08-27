@@ -3,7 +3,7 @@
 > **MANDATORY — READ BEFORE ANY WORK IN THIS REPO.**
 > Before answering any question, explaining behavior, or implementing any change (new feature, bug fix, endpoint, business-rule change, refactor, migration) in this repository, you MUST read this file in full first. Use it to identify which module(s) the request touches, then read that module's section and its listed critical files before writing or explaining anything. Do not rely on memory of a previous session's reading of this file — re-read it at the start of every new conversation/session. If the request is trivial (e.g. answering from a single obviously-unrelated file), still confirm against this file's module map that it's actually unrelated before skipping deeper reading.
 
-This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26). Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
+This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26; the "Facility Master Data" module and its tables were added 2026-08-27 in two same-day phases — Phase 1 built the tables as dormant/parallel data, Phase 2 cut `visitor_request`/`kiosk_device`/Visitor Sync over to depend on them for real — see that module's section for exactly what is and isn't wired in). Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
 
 **Rule for future sessions:** if you discover that code no longer matches this document, trust the code and update this document — do not silently follow stale documentation.
 
@@ -35,7 +35,7 @@ This file is the primary system/business context for Claude sessions working on 
         ┌───────────────┬───────────┼───────────────┬────────────────┐
         │               │           │                │                │
    VISITOR SYNC   VISITOR REG.   KIOSK ENTRY    KIOSK SELF-SERVICE   ADMIN
-  (AppSheet →API) (public token   (Visitor-with- (Gatesale/Truck,   (Farms, Kiosks,
+  (AppSheet →API) (public token   (Visitor-with- (Gatesale/Truck,   (Facilities, Kiosks,
         │          face/QR reg)   Approval flow)  no pre-approval)   Roles, Users,
         │               │           │                │             Biosecurity, etc.)
         ▼               ▼           ▼                ▼                │
@@ -67,7 +67,7 @@ This file is the primary system/business context for Claude sessions working on 
 
 **Purpose:** Accept a visitor visit that has already been approved in an external AppSheet workflow, and turn it into a `visitor_request` + (if needed) a `user_directory`/`visitor_profile` pair inside this system, generating a `registration_token` the visitor uses to self-register their face.
 
-**Responsibilities:** API-key authentication of the caller; farm-name resolution (fuzzy-but-safe); idempotent visitor-request creation; directory reuse/creation; full API request/response logging.
+**Responsibilities:** API-key authentication of the caller; facility-name resolution (fuzzy-but-safe); idempotent visitor-request creation; directory reuse/creation; full API request/response logging.
 
 **Entry Points:**
 - `POST /api/v1/visitor/sync` (routes/api.php), behind the `api.key` middleware alias.
@@ -86,7 +86,7 @@ VisitorSyncController::store
    ↓
 VisitorSyncService::syncApprovedRequest
    ↓
-FarmResolver::resolve (alias → normalized name)
+FacilityResolver::resolve (alias → normalized name, resolves against facility_list/facility_aliases)
    ↓
 resolveDirectory (reuse-by-name+email, else create UserDirectory + VisitorProfile)
    ↓
@@ -97,13 +97,13 @@ ApiLog::create (always, success or failure)
 JSON response {success, message, registration_token, visitor_request}
 ```
 
-**Data Used:** `visitor_request`, `user_directory`, `visitor_profile`, `farm_list`, `farm_aliases`, `identity_type`, `visitor_type`, `api_logs`.
+**Data Used:** `visitor_request`, `user_directory`, `visitor_profile`, `facility_list`, `facility_aliases`, `identity_type`, `visitor_type`, `api_logs`.
 
 **Dependencies:**
 ```text
 Visitor Sync
  ├── VerifyApiKey middleware (config('sentry.sync_api_key') / SYNC_API_KEY env)
- ├── FarmResolver → farm_list, farm_aliases
+ ├── FacilityResolver → facility_list, facility_aliases
  ├── IdentityType 'Visitor' row (must exist — no fallback if missing)
  ├── VisitorType 'Visitor' row (must exist — no fallback if missing)
  └── ApiLog (always written, success or failure)
@@ -115,12 +115,12 @@ Visitor Sync
 - **Idempotency key is `visitor_id`** (an AppSheet-issued identifier, stored verbatim, never modified/prefixed/normalized). If a `visitor_request` with that `visitor_id` already exists, the sync call returns success with the *existing* `registration_token` — it never creates a duplicate.
 - **Directory reuse requires BOTH `full_name` AND `email` to match** (case-insensitive, trimmed) an existing `user_directory` row. Any partial match (same email, different name, etc.) always creates a **new** directory — true duplicate people are only resolved later, by the face-match confirmation workflow in Visitor Registration, never here.
 - `visitor_type_id` is only ever set on a **newly created** directory's `visitor_profile`; an existing/reused directory's profile is never modified by a sync call (so an admin's manual correction is never silently overwritten).
-- Farm resolution: exact alias match → case-insensitive alias match → exact normalized farm-name match (strips a leading "FARM"/"FARMS " prefix only if followed by 2+ word chars, so "FARM A" is preserved but "FARM ALPHA" → "ALPHA"). **No fuzzy/LIKE matching** — a genuinely new farm-name spelling must get a `farm_aliases` row added via the admin panel, or the sync fails with "Farm not found."
+- Facility resolution (via `FacilityResolver`, renamed from `FarmResolver` on 2026-08-27 — see the "Facility Master Data" module): exact alias match → case-insensitive alias match → exact normalized facility-name match (strips a leading "FARM"/"FARMS " prefix only if followed by 2+ word chars, so "FARM A" is preserved but "FARM ALPHA" → "ALPHA" — this text-normalization quirk is unchanged from the farm-only era, since AppSheet still only ever sends farm names today). **No fuzzy/LIKE matching** — a genuinely new facility-name spelling must get a `facility_aliases` row added (no admin UI for this yet — see Known Constraints), or the sync fails with "Facility not found."
 - `visit_datetime`/`departure_datetime` are parsed with `Carbon::parse()` explicitly (not the model's datetime cast) to tolerate AppSheet's inconsistent US-style date padding.
 
 **Status Lifecycle:** A freshly synced request is always `approval_status = 'Approved'`, `request_status = 'ACTIVE'` — approval already happened upstream in AppSheet; this system does not have its own approval step for this flow.
 
-**Error Handling:** Missing/invalid `X-API-KEY` → 401 before any business logic runs. Missing farm/alias, missing `IdentityType`/`VisitorType` seed rows → `{success:false, message}` with HTTP 400, still logged to `api_logs`. All requests (success and failure) are recorded to `api_logs` with the full request payload and response body.
+**Error Handling:** Missing/invalid `X-API-KEY` → 401 before any business logic runs. Missing facility/alias, missing `IdentityType`/`VisitorType` seed rows → `{success:false, message}` with HTTP 400, still logged to `api_logs`. All requests (success and failure) are recorded to `api_logs` with the full request payload and response body.
 
 **Important Files:**
 
@@ -131,14 +131,14 @@ Visitor Sync
 | Request | `app/Http/Requests/Api/VisitorSyncRequest.php` | Field validation |
 | Controller | `app/Http/Controllers/Api/VisitorSyncController.php` | Orchestrates service + `ApiLog` |
 | Service | `app/Services/VisitorSyncService.php` | Core business logic |
-| Service | `app/Services/FarmResolver.php` | Farm-name → `FarmList` resolution |
+| Service | `app/Services/FacilityResolver.php` | Facility-name → `FacilityList` resolution (renamed from `FarmResolver` on 2026-08-27) |
 | Model | `app/Models/ApiLog.php` | Request/response audit trail for this endpoint |
 
 **Configuration:** `SYNC_API_KEY` env → `config('sentry.sync_api_key')`.
 
-**Known Constraints:** Single shared static API key (no per-caller keys/rotation). No signature/HMAC verification, no replay protection beyond the `visitor_id` idempotency check. No rate limiting configured on this route.
+**Known Constraints:** Single shared static API key (no per-caller keys/rotation). No signature/HMAC verification, no replay protection beyond the `visitor_id` idempotency check. No rate limiting configured on this route. The inbound payload's field name is still the literal string `farm` (`$data['farm']`) — this is AppSheet's external contract and was deliberately left unrenamed during the 2026-08-27 cutover; only the internal resolution target (`facility_list`/`facility_aliases`) changed.
 
-**Important Notes for Future Changes:** Never weaken the directory-reuse match (full_name + email) — it's a deliberate anti-merge safeguard; loosening it would let two different people be silently treated as one directory. Do not add fuzzy farm-name matching without discussing — it was explicitly rejected as unsafe (comment in `FarmResolver`).
+**Important Notes for Future Changes:** Never weaken the directory-reuse match (full_name + email) — it's a deliberate anti-merge safeguard; loosening it would let two different people be silently treated as one directory. Do not add fuzzy facility-name matching without discussing — it was explicitly rejected as unsafe (comment in `FacilityResolver`).
 
 ---
 
@@ -284,7 +284,7 @@ VisitorKioskService::processEntry — see state machine below
 
 1. **Trigger:** `POST /kiosk/{kiosk}/entry`.
 2. **Input:** `visitor_request_id`, `action` (`first_entry`/`temporary_exit`/`return`/`final_exit`), optional base64 `photo`, `authentication_method` (`FACE`|`QR`, defaults `FACE`).
-3. **Validation:** request must exist; must not already be `isCompleted()` (COMPLETED/COMPLETED_AUTO/INCOMPLETE); `farm_id` must match the kiosk's own farm (defense-in-depth, duplicating the `recognize`-time check).
+3. **Validation:** request must exist; must not already be `isCompleted()` (COMPLETED/COMPLETED_AUTO/INCOMPLETE); `facility_id` must match the kiosk's own facility (defense-in-depth, duplicating the `recognize`-time check; column renamed from `farm_id` on 2026-08-27, see "Facility Master Data").
 4. **first_entry** (only when no active session exists): creates `visitor_session` (`session_status=Inside`, fresh `login_id`), creates a `visitor_entry_logs` row (`movement_type=First Entry`, `action=IN`), then (unless excluded — see Business Rules) calls `VisitorSheetWriter::appendTimeIn` — failures here are caught and logged, **never** roll back the DB transaction.
 5. **temporary_exit** (requires current status `Inside`): session → `Outside`, entry log `Temporary Exit`/`OUT`. No Sheets write.
 6. **return** (requires current status `Outside`): session → `Inside`, entry log `Return`/`IN`. No Sheets write.
@@ -292,7 +292,7 @@ VisitorKioskService::processEntry — see state machine below
 8. **Photo:** stored on every transition (`storePhoto`) to `storage/app/public/kiosk-photos/{visitor_request_id}/{action}-{uniqid}.jpg` if a base64 photo was supplied; failures are logged and treated as non-fatal (`photo` column left null).
 9. **Final response:** `{success, session_status, message}`.
 
-**Data Used:** `visitor_request`, `visitor_session`, `visitor_entry_logs`, `kiosk_device`, `farm_list`.
+**Data Used:** `visitor_request`, `visitor_session`, `visitor_entry_logs`, `kiosk_device`, `facility_list` (both `visitor_request.facility_id` and `kiosk_device.facility_id` reference `facility_list.facility_id`, not `farm_list` — see "Facility Master Data").
 
 **Dependencies:**
 ```text
@@ -307,7 +307,7 @@ Kiosk Entry
 
 **Business Rules:**
 - **A completed request (`isCompleted()` = COMPLETED / COMPLETED_AUTO / INCOMPLETE) is a hard terminal state** — never reused, always requires a brand-new approved request to visit again.
-- **Farm binding is enforced twice**: once at `/recognize` (shows the correct "wrong farm" message) and again inside `processEntry` itself (defense-in-depth so no other code path can bypass it).
+- **Farm binding is enforced twice**: once at `/recognize` (shows the correct "wrong farm" message) and again inside `processEntry` itself (defense-in-depth so no other code path can bypass it). Both checks compare `facility_id` (not `farm_id`, renamed 2026-08-27) — the business rule and the "wrong farm" wording visitors/admins see are unchanged, only the underlying column/table is now `facility_list` instead of `farm_list`.
 - `pickBestActiveRequest` ordering is intentional and load-bearing: non-completed requests outrank completed ones, which outrank a plain "most recent" tiebreak — this exists specifically so a stale COMPLETED request for the kiosk's own farm never masks a genuinely active request at a *different* farm (the correct message must be "wrong farm," not "already completed").
 - `authentication_method` accepts only the literal strings `FACE` or `QR`; anything else silently defaults to `FACE`.
 - Google Sheets writes for `first_entry`/`final_exit` are **best-effort and non-blocking** — a Sheets failure never fails the kiosk transaction; it's only logged (`\Log::error`).
@@ -384,7 +384,7 @@ FaceMatchingService::findMatch (unscoped, re-checked to avoid a duplicate on a f
                   returns directory payload (registration only — no visit/session/entry_log yet)
 ```
 
-**Data Used:** `user_directory`, `visitor_profile` (`visitor_type_id`, `company`, `plate_no`), `face_profile`, `visitor_request` (`origin` column is Gatesale/Truck/general-purpose, but `registration_token` is left `null` for self-service requests since there's no registration link), `farm_list`, cache locks (`cache_locks` table, `CACHE_STORE=database`).
+**Data Used:** `user_directory`, `visitor_profile` (`visitor_type_id`, `company`, `plate_no`), `face_profile`, `visitor_request` (`origin` column is Gatesale/Truck/general-purpose, but `registration_token` is left `null` for self-service requests since there's no registration link), `facility_list` (via `visitor_request.facility_id`/`kiosk_device.facility_id`, renamed from `farm_id`/`farm_list` on 2026-08-27), cache locks (`cache_locks` table, `CACHE_STORE=database`).
 
 **Dependencies:**
 ```text
@@ -591,11 +591,80 @@ ACTIVE + Outside with a real OUT log        → COMPLETED_AUTO  (Sheets write, u
 
 ---
 
-### Module: `Admin Management` (Farms, Kiosks, Roles, Users, Reference Data, Biosecurity Rules, Audit Logs)
+### Module: `Facility Master Data` (Phase 1: additive tables — Phase 2: core cutover — Phase 3: admin CRUD — Phase 4: Downtime Matrix/Stationary cutover — Phase 5: legacy Farm admin decommissioned — all 2026-08-27)
+
+**Purpose:** Normalized, multi-brand replacement for the farm-only `farm_list`/`farm_aliases` model — introduced so that non-farm sites (plants, DC warehouses) can eventually be represented alongside farms, classified by business group (`facility_type`: BVA/GEFI/GEFI-LIVE/PS/FEEDMILL/GP-HY/PS-HY/IBG) and physical kind (`facility_category`: FARM/PLANT/DC_WAREHOUSE/OTHER), with an `is_rtl` flag per facility.
+
+**Current status — read this before touching either "farm" or "facility" anything:**
+- **Phase 1** (same-day, earlier) created `facility_type`/`facility_category`/`facility_list`/`facility_aliases` as new, additive-only tables, seeded with real reference data (8 types, 4 categories, 16 named facilities), fully isolated from the rest of the schema.
+- **Phase 2** (same-day, later — this cutover) migrated the **core** farm-dependent runtime path onto `facility_list`: `visitor_request.farm_id` and `kiosk_device.farm_id` were **renamed and repointed** to `facility_id`/`facility_list` (with real data backfilled, not dropped — see mapping below); `FarmResolver` was **renamed to `FacilityResolver`** and now resolves against `facility_list`/`facility_aliases`; `VisitorSyncService`, both Kiosk farm-binding checks (`KioskController`, `VisitorKioskService`), and the Kiosk Devices admin screen were all updated to match. **`farm_list`/`farm_aliases` themselves were NOT touched, renamed, or dropped** — they still exist with all 8 farms and 11 aliases intact, but as of this cutover **nothing reads or writes them anymore** except the still-unchanged Farms/Farm Aliases admin screens (`downtime_matrix`/`downtime_stationary` were deferred at this point, then migrated in Phase 4 below).
+- **Farm ID → Facility ID mapping is NOT the identity function** — a hard constraint discovered during this cutover, not a design choice: Phase 1 had already assigned the same 8 farm names (Saturn, Venus, Cinnamon, Mars, Madera, Rosemary, San Pascual, Victory) sequential `facility_id` 1–8 alongside 8 unrelated non-farm facilities at 9–16, so `facility_id` could not equal `farm_id` without renumbering all 16 rows (rejected as unnecessary risk). The approved, permanent mapping (encoded directly in the migrations, not derived at runtime):
+
+  | farm_id | farm_code | farm_name | → facility_id | facility_code (now real, was placeholder) |
+  |---|---|---|---|---|
+  | 1 | MLF | MADERA | 5 | `MLF` (+ `location = 'Tarlac City'`) |
+  | 3 | SPLF | SAN PASCUAL | 7 | `SPLF` |
+  | 4 | VLF | VICTORY | 8 | `VLF` |
+  | 5 | RLF | ROSEMARY | 6 | `RLF` |
+  | 7 | CLF | CINNAMON | 3 | `CLF` |
+  | 10 | SLF | SATURN | 1 | `SLF` |
+  | 11 | VENUS | VENUS | 2 | `VENUS` |
+  | 12 | MARS | MARS | 4 | `MARS` |
+
+  The other 8 `facility_list` rows (DC Plaridel, DC Sta. Rosa, S&B Cebu Plant, Sacobia, GEFI - MCP, Buenavista Farm, Kelsey, Forestierra) have no `farm_list` counterpart at all and keep their Phase 1 placeholder `facility_code`.
+- This was done in response to an external migration-planning instruction set (kept at the repo root as `Claude Instructions — Safe Facility Master Data Migration Across All Modules.md`), which explicitly required a dependency audit and an approved mapping before any schema change — both were done and confirmed before this cutover ran. That instruction document also assumed a "Biosecurity PDF parser" that resolves facility names via aliases — **no such parser exists anywhere in this codebase**; disregard that part of the instructions if revisited.
+- `facility_aliases` still has **zero rows** — no alias text was supplied for any of the 16 facilities in either phase; `FacilityResolver`'s alias-lookup steps are live code paths but have no data to match against yet beyond exact/normalized facility-name matching.
+- **Phase 3** (same-day, later still) added a **Facility / Facility Alias admin CRUD** — `FacilityController`/`FacilityAliasController`, mirroring the Farms/Farm Aliases controller+request+view pattern exactly, gated by a new `facilities.manage` permission (seeded via `PermissionSeeder`, granted to the `Administrator` role via `RolePermissionSeeder`). This closes the "no admin CRUD" gap noted after Phase 2. Verifying this phase's display of the 16 existing facilities caught a real, unrelated data-entry typo from the Phase 1 seed (`facility_id` 16 was stored as `"Forestiera"`/`GEFILIVE-FORESTIERA`, one `r` short of the seeder source's `"Forestierra"`/`GEFILIVE-FORESTIERRA`) — corrected directly in the DB to match the seeder.
+- **Phase 4** (same-day, later still) migrated **Downtime Matrix/Downtime Stationary** onto `facility_list` too — `downtime_matrix.origin_farm_id`/`destination_farm_id` and `downtime_stationary.assigned_farm_id` were **renamed and repointed** to `origin_facility_id`/`destination_facility_id`/`assigned_facility_id`, using the exact same farm_id→facility_id mapping as Phase 2 (real data backfilled, not dropped — the one existing rule, `rule_id=3`, maps `origin_farm_id 1→origin_facility_id 5` (Madera) and `destination_farm_id 3→destination_facility_id 7` (San Pascual), values `13.00`/`26.00` preserved exactly). `DowntimeMatrixController`/`DowntimeStationaryController`'s dropdowns now source `FacilityList::all()` instead of `FarmList::all()`, so a downtime rule can reference a FARM, PLANT, DC_WAREHOUSE, or OTHER facility, not only a farm — **no new downtime business logic was added**, this was purely the master-data relationship swap; Downtime Matrix/Stationary still aren't read by any business logic (see Known Issue #3). At this point `farm_list`/`farm_aliases` had **zero** remaining live FKs from any table — only the (then still-existing) Farms/Farm Aliases admin screens read/write them.
+  - Two MySQL-specific migration pitfalls surfaced here that SQLite's grammar didn't catch (worth remembering for any future FK-column rename): (1) InnoDB refuses to drop a unique index while a FK still depends on it ("Cannot drop index ... needed in a foreign key constraint") — the FK must be dropped in its own prior `Schema::table()` statement, strictly before the unique index or the column, in both `up()` and `down()`; (2) MySQL's 64-character identifier limit means Laravel's auto-generated composite-unique name for the long facility columns (`downtime_matrix_origin_facility_id_destination_facility_id_unique`) is too long — it needed an explicit shorter name (`downtime_matrix_origin_dest_facility_unique`) passed to both the `unique()` call and its matching `dropUnique()` in `down()`.
+- **Phase 5** (same-day, later still) **decommissioned the legacy Farms/Farm Aliases admin module** now that nothing in the runtime depended on it: removed `FarmController`, `FarmAliasController`, their four `Store/Update*Request` classes, all 8 view files (`resources/views/admin/{farms,farm-aliases}/`), the two `Route::resource` lines, the sidebar nav block, and the `farms.manage` permission (deleted from `PermissionSeeder.php` and from the live DB's `permissions`/`role_permissions` tables). **`farm_list`/`farm_aliases` tables and their Eloquent models (`FarmList`, `FarmAlias`) were deliberately kept** — the tables as an explicit rollback/legacy-data safety layer (per the source instructions), the models because the tables still exist and nothing asked for their removal. No tests existed for the Farm admin module (it predated this whole migration effort), so there was nothing to remove there. One residual, out-of-scope reference was found and left alone: `resources/views/admin/dashboard.blade.php`/`dashboard-content.blade.php` still show a "Farms" stat tile calling `FarmList::count()` — harmless (the model still exists) but now links to nothing, since there's no admin screen left to navigate to.
+
+**Responsibilities (today):** Canonical facility-name resolution for Visitor Sync (via `FacilityResolver`); the FK target for `visitor_request.facility_id`, `kiosk_device.facility_id`, `downtime_matrix.{origin,destination}_facility_id`, and `downtime_stationary.assigned_facility_id`; full admin CRUD for facilities and facility aliases.
+
+**Entry Points:** `admin/facilities` and `admin/facility-aliases` (both full `Route::resource`, behind `auth` + `permission:facilities.manage`) — see Admin Management for the shared pattern. Also consumed internally by `VisitorSyncService` (via `FacilityResolver`) and by `KioskDeviceController`/`DowntimeMatrixController`/`DowntimeStationaryController`'s create/edit dropdowns (all now `FacilityList::all()`).
+
+**Data Used:** `facility_type`, `facility_category`, `facility_list`, `facility_aliases`. Four existing tables now carry a live FK into `facility_list`: `visitor_request.facility_id` (`RESTRICT` on delete), `kiosk_device.facility_id` (`CASCADE` on delete), `downtime_matrix.origin_facility_id`/`destination_facility_id` (`CASCADE` on delete, unchanged from the old farm_id behavior), and `downtime_stationary.assigned_facility_id` (`CASCADE` on delete, also unchanged). Nothing in the schema points at `farm_list` anymore except `farm_aliases` itself.
+
+**Dependencies:** None of its own — a pure lookup/reference structure, same as `farm_list` was.
+
+**Related Modules:** Now the live dependency of **Visitor Sync** (`FacilityResolver`), **Kiosk Entry** (`visitor_request.facility_id`/`kiosk_device.facility_id` binding checks), **Kiosk Self-Service** (shares the same binding checks), and **Admin Management**'s Biosecurity Rules submodules (Downtime Matrix/Downtime Stationary). The old Farms/Farm Aliases admin screens (`FarmController`/`FarmAliasController`) were removed entirely in Phase 5 — `farm_list`/`farm_aliases` are now pure legacy tables with no admin UI and no code reading/writing them at all.
+
+**Business Rules:**
+- `facility_code` and `facility_type_name`/`facility_category_name` are DB-unique, same pattern as `farm_list.farm_code`.
+- A facility's `facility_category`/`is_rtl` are per-facility properties, not inferred from `facility_type` — e.g. GEFI has both a PLANT (`GEFI - MCP`) and, under the separate `GEFI-LIVE` type, RTL FARMs. Do not assume every facility under one type shares a category or RTL setting.
+- The farm_id → facility_id mapping above is a **fixed, permanent translation**, not a name-based lookup performed at migration time — do not attempt to re-derive it from `facility_name` matching in any future code; the migrations hardcode the exact pairs.
+
+**Models:** `App\Models\FacilityType`, `App\Models\FacilityCategory`, `App\Models\FacilityList` (relations: `facilityType()`, `facilityCategory()`, `aliases()`, `kioskDevices()`, `originDowntimeMatrixRules()`, `destinationDowntimeMatrixRules()`, `downtimeStationaryRules()`), `App\Models\FacilityAlias` (relation: `facility()`) — all four use the `Auditable` trait (matching `FarmList`/`FarmAlias`/`IdentityType`/`EmployeeType`'s pattern). `App\Models\VisitorRequest::facility()`, `App\Models\KioskDevice::facility()`, `App\Models\DowntimeMatrix::originFacility()`/`destinationFacility()`, and `App\Models\DowntimeStationary::assignedFacility()` (all renamed from their `*Farm()` equivalents) now belong to `FacilityList`, not `FarmList`. `FarmList`'s reciprocal `kioskDevices()`/`originDowntimeMatrixRules()`/`destinationDowntimeMatrixRules()`/`downtimeStationaryRules()` methods were removed (Phase 4) since the columns they pointed at no longer exist on those tables — moved to `FacilityList` instead.
+
+**Important Files:**
+
+| Component | File | Responsibility |
+|---|---|---|
+| Migrations (Phase 1) | `database/migrations/2026_08_27_110000_create_facility_type_table.php` through `..._110003_create_facility_aliases_table.php` | Schema for all 4 new tables |
+| Migrations (Phase 2) | `database/migrations/2026_08_27_120000_update_farm_matched_facility_codes.php`, `..._120001_migrate_visitor_request_farm_id_to_facility_id.php`, `..._120002_migrate_kiosk_device_farm_id_to_facility_id.php` | Real facility_code/location backfill; `visitor_request`/`kiosk_device` column cutover (both fully reversible via their own `down()`) |
+| Migrations (Phase 4) | `database/migrations/2026_08_27_130000_migrate_downtime_matrix_farm_ids_to_facility_ids.php`, `..._130001_migrate_downtime_stationary_farm_id_to_facility_id.php` | `downtime_matrix`/`downtime_stationary` column cutover, same mapping/pattern as Phase 2 (also fully reversible) |
+| Models | `app/Models/FacilityType.php`, `FacilityCategory.php`, `FacilityList.php`, `FacilityAlias.php` | Eloquent models |
+| Service | `app/Services/FacilityResolver.php` (renamed from `FarmResolver.php`) | Facility-name/alias resolution for Visitor Sync |
+| Seeders | `database/seeders/FacilityTypeSeeder.php`, `FacilityCategorySeeder.php`, `FacilityListSeeder.php` (registered in `DatabaseSeeder.php`) | Reference data + the 16 named facilities |
+| Controllers (Phase 3) | `app/Http/Controllers/Admin/FacilityController.php`, `FacilityAliasController.php` | Full CRUD (originally patterned on `FarmController`/`FarmAliasController`, both removed in Phase 5) |
+| Requests (Phase 3) | `app/Http/Requests/Admin/{Store,Update}Facility{,Alias}Request.php` | Validation + `facilities.manage` authorization |
+| Views (Phase 3) | `resources/views/admin/facilities/*`, `resources/views/admin/facility-aliases/*` | Admin UI |
+| Test helper | `tests/Concerns/CreatesFacilities.php` | Shared `createFacility()` used by every Kiosk/Visitor Sync/Downtime test that needs a valid `facility_list` fixture |
+| Tests (Phase 3) | `tests/Feature/Admin/FacilityAdminTest.php`, `FacilityAliasAdminTest.php` | CRUD, validation, uniqueness, cascade/restrict-on-delete, deactivation-safety coverage |
+| Tests (Phase 4) | `tests/Feature/Admin/DowntimeMatrixAdminTest.php`, `DowntimeStationaryAdminTest.php` | Same coverage shape as Phase 3, for the renamed `*_facility_id` columns |
+| Removed (Phase 5) | `app/Http/Controllers/Admin/{Farm,FarmAlias}Controller.php`, `app/Http/Requests/Admin/{Store,Update}{Farm,FarmAlias}Request.php`, `resources/views/admin/{farms,farm-aliases}/*` | Legacy Farm admin CRUD — deleted; `farm_list`/`farm_aliases` tables and `FarmList`/`FarmAlias` models were kept |
+
+**Known Constraints:** `facility_code` is real for the 8 farm-matched facilities but still placeholder (`TYPE-SLUG`) for the other 8 (no requirement to change these — the admin screen lets anyone rename them now that a UI exists). `facility_aliases` has zero rows, so any AppSheet facility-name spelling other than the exact/normalized match will fail sync with "Facility not found" until an admin adds an alias via `admin/facility-aliases`. `farm_list`/`farm_aliases` are now pure legacy data with **no admin UI at all** (Phase 5 removed it) — they exist only as a rollback/legacy safety layer per the source instructions; nothing in the running application reads or writes them. `resources/views/admin/dashboard{,-content}.blade.php` still show a "Farms" stat tile (`FarmList::count()`) — a known, deliberately-left residual (see Phase 5 note above), harmless but pointing at a now admin-less concept.
+
+**Important Notes for Future Changes:** The only remaining farm→facility decision is whether/when to drop the now fully-legacy `farm_list`/`farm_aliases` tables themselves (kept intentionally as of Phase 5, per the source instructions' rollback guidance — nothing reads or writes them, admin UI included). Do not re-derive the farm_id→facility_id mapping from name matching in new code — treat the table above as the historical record of a fact, not a formula. When adding fields to the Facility form, follow `FacilityController`'s exact pattern (Store/Update Request + view three-way split). **If you ever write another migration that renames a FK column backed by a unique/composite-unique index on MySQL**, drop the FK in its own prior `Schema::table()` statement before touching the index or column (InnoDB blocks dropping an index a live FK still needs), and check any auto-generated constraint name against MySQL's 64-character identifier limit before relying on it — both bit the Phase 4 migration and neither was caught by the sqlite-backed test suite.
+
+---
+
+### Module: `Admin Management` (Facilities, Kiosks, Roles, Users, Reference Data, Biosecurity Rules, Audit Logs)
 
 **Purpose:** Authenticated back-office CRUD for every piece of reference/configuration data the kiosk-facing modules depend on.
 
-**Responsibilities:** Standard create/read/update/delete for: Farms (`FarmList`), Farm Aliases, Kiosk Devices (+ token regeneration), Identity Types, Employee Types, Biosecurity Rules (main module) with its two submodules Downtime Matrix and Downtime Stationary, Roles (+ permission assignment), Users, and a read-only Audit Log viewer.
+**Responsibilities:** Standard create/read/update/delete for: Facilities (`FacilityList`), Facility Aliases, Kiosk Devices (+ token regeneration), Identity Types, Employee Types, Biosecurity Rules (main module) with its two submodules Downtime Matrix and Downtime Stationary, Roles (+ permission assignment), Users, and a read-only Audit Log viewer. **The legacy Farms/Farm Aliases CRUD (`FarmController`/`FarmAliasController`) was decommissioned on 2026-08-27 (Phase 5)** once nothing in the runtime depended on it anymore — see the "Facility Master Data" module.
 
 **Entry Points:** All under `routes/web.php`, behind the `auth` middleware and a per-resource `permission:<key>` middleware — see the permission table below. All are Laravel resource routes (`Route::resource`) except `roles/{role}/permissions` (GET/POST), `kiosks/{kiosk}/regenerate-token` (POST), and `admin/biosecurity-rules` itself (a plain `GET`-only landing route — see the Biosecurity Rules submodule note below).
 
@@ -629,15 +698,18 @@ Eloquent model create/update/delete  (triggers Auditable trait → audit_logs ro
    ↓
 Blade partial response — every controller has a private view() helper that returns
    a bare partial for AJAX requests (admin panel is AJAX-driven) or the full index
-   page otherwise
+   page otherwise (the full-page fallback for create()/edit() is a latent shared
+   bug - see Known Issues - that never surfaces because every real nav
+   interaction sends X-Requested-With, per public/js/admin.js)
 ```
 
 **Data Used / permission key per resource:**
 
 | Resource | Model | Permission key |
 |---|---|---|
-| Farms | `FarmList` | `farms.manage` |
-| Farm Aliases | `FarmAlias` | `farms.manage` (shares Farms' permission) |
+| Facilities (added 2026-08-27, Phase 3) | `FacilityList` | `facilities.manage` |
+| Facility Aliases (added 2026-08-27, Phase 3) | `FacilityAlias` | `facilities.manage` (shares Facilities' permission) |
+| ~~Farms~~ / ~~Farm Aliases~~ | ~~`FarmList`~~ / ~~`FarmAlias`~~ | ~~`farms.manage`~~ — **removed 2026-08-27, Phase 5** (controllers, views, routes, nav, and the `farms.manage` permission itself all deleted; `farm_list`/`farm_aliases` tables kept as legacy data with no admin UI) |
 | Kiosk Devices | `KioskDevice` | `kiosks.manage` |
 | Identity Types | `IdentityType` | `identity_types.manage` |
 | Employee Types | `EmployeeType` | `employee_types.manage` |
@@ -650,11 +722,11 @@ Blade partial response — every controller has a private view() helper that ret
 
 **Dependencies:** `RolePermissionService` (role↔permission sync), `AuthService` (user create/update with password hashing), `AuditLogService` (filtered/paginated log queries).
 
-**Related Modules:** Farms/Farm Aliases feed `Visitor Sync`'s `FarmResolver`. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth. Roles/Permissions/Users feed `Authentication & Authorization`. Downtime Matrix/Downtime Stationary and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: these are modeled and administrable but **no other module currently reads them** (no code path queries `DowntimeMatrix`/`DowntimeStationary` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response).
+**Related Modules:** Facilities/Facility Aliases feed `Visitor Sync` (`FacilityResolver`, renamed from `FarmResolver`), which resolves exclusively against `facility_list`/`facility_aliases` — see the "Facility Master Data" module. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth via `kiosk_device.facility_id` → `facility_list` — its create/edit dropdown lists `FacilityList::all()`. Roles/Permissions/Users feed `Authentication & Authorization`. Downtime Matrix/Downtime Stationary also point at `facility_list` (`origin_facility_id`/`destination_facility_id`/`assigned_facility_id`, dropdowns sourced from `FacilityList::all()`) — and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: these are modeled and administrable but **no other module currently reads them** (no code path queries `DowntimeMatrix`/`DowntimeStationary` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response). **The legacy Farms/Farm Aliases admin CRUD was removed entirely on 2026-08-27 (Phase 5)** — `farm_list`/`farm_aliases` now have zero remaining live FKs from any table AND no admin UI; they are pure legacy data kept only as a rollback safety layer.
 
 **Business Rules:**
 - Every `Store*Request`/`Update*Request`'s `authorize()` independently re-checks the same permission the route middleware already checked — belt-and-suspenders, not a bypass path.
-- Unique constraints enforced at the validation layer mirror DB-level unique columns (`farm_code`, `serial_number`, `role_name`, `user_email`, `identity_type_name`, `employee_type_name`, `alias_text`).
+- Unique constraints enforced at the validation layer mirror DB-level unique columns (`facility_code`, `serial_number`, `role_name`, `user_email`, `identity_type_name`, `employee_type_name`, `alias_text`).
 - `RoleController::updatePermissions` does a full `sync()` (not merge) — submitting an empty `permission_ids` array revokes **all** permissions from that role.
 - The Biosecurity Rules landing page never queries or renders both submodules' data at once — `BiosecurityRuleController::index` returns only the two-card partial with no model query at all; each submodule's own controller (`DowntimeMatrixController`, `DowntimeStationaryController`) is the sole owner of its own listing/CRUD, loaded asynchronously only when its card/link is clicked. Do not merge the two submodules' index queries onto the landing page — that was an explicit request when the module was split.
 
@@ -669,9 +741,9 @@ Blade partial response — every controller has a private view() helper that ret
 
 **Configuration:** `config('sentry.pagination')` (`APP_PAGINATION_SIZE` env, default 50) controls every index listing's page size.
 
-**Known Constraints:** No bulk operations (import/export) on any admin resource. No soft-deletes anywhere — `destroy()` is a hard delete (cascades per each migration's FK constraints — e.g. deleting a `FarmList` cascades to `kiosk_device`, `downtime_matrix`, and `downtime_stationary`; deleting a `user_directory` row cascades to `visitor_request` and `visitor_profile`).
+**Known Constraints:** No bulk operations (import/export) on any admin resource. No soft-deletes anywhere — `destroy()` is a hard delete (cascades per each migration's FK constraints — e.g. deleting a `user_directory` row cascades to `visitor_request` and `visitor_profile`; deleting a `FacilityList` row cascades to `facility_aliases`, `kiosk_device`, `downtime_matrix` (both `origin_facility_id`/`destination_facility_id`), and `downtime_stationary`, and is blocked (`RESTRICT`) by any `visitor_request` still pointing at it — this is now the operative version of the pre-cutover `FarmList`/`visitor_request`/`downtime_matrix`/`downtime_stationary` behavior). **As of the 2026-08-27 cutovers, deleting a `FarmList` row no longer cascades to (or is blocked by) anything** — `farm_aliases` is the only remaining FK into `farm_list`; `kiosk_device`, `visitor_request`, `downtime_matrix`, and `downtime_stationary` were all moved to `facility_list` across Phases 2 and 4 and have no relationship to `farm_list` at all anymore. `facility_type`/`facility_category` (the lookup tables `facility_list` depends on) still have no admin CRUD of their own — only `FacilityList`/`FacilityAlias` got one in Phase 3 — so a genuinely new facility type or category still needs a seeder change or direct DB access.
 
-**Important Notes for Future Changes:** Do not add a new admin resource without both a `permission:<key>` route guard **and** a matching `authorize()` check in its FormRequests — the existing pattern relies on both being present. If you add a `VisitorType` admin controller (a real gap — see the Self-Service module's Known Constraints), follow this exact same pattern for consistency. If a third Biosecurity Rules submodule is ever added, follow the same landing-card + nested-resource-route pattern used for Downtime Matrix/Downtime Stationary rather than adding a third card of unrelated shape.
+**Important Notes for Future Changes:** Do not add a new admin resource without both a `permission:<key>` route guard **and** a matching `authorize()` check in its FormRequests — the existing pattern relies on both being present. If you add a `VisitorType` admin controller (a real gap — see the Self-Service module's Known Constraints), follow this exact same pattern for consistency. If a third Biosecurity Rules submodule is ever added, follow the same landing-card + nested-resource-route pattern used for Downtime Matrix/Downtime Stationary rather than adding a third card of unrelated shape. `FacilityController`/`FacilityAliasController` (added 2026-08-27, Phase 3) are now the canonical example of this module's controller+request+view pattern — use them as the template for any future `FacilityType`/`FacilityCategory` admin screens (the original template, the Farms/Farm Aliases CRUD, was removed in Phase 5).
 
 ---
 
@@ -825,14 +897,14 @@ AuditLog::create([user_id: auth()->id(), action, module: class_basename($this), 
 
         Configuration/back-office, feeds the runtime modules with reference data:
         ┌───────────────────────────────────────────────────────────┐
-        │  Admin Management (Farms/Aliases/Kiosks/Roles/Users/etc.)   │
+        │  Admin Management (Facilities/Aliases/Kiosks/Roles/Users/etc.) │
         │        ↑ gated by ↓                                          │
         │  Authentication & Authorization                              │
         └───────────────────────────────────────────────────────────┘
 ```
 
 **In plain language:**
-- `Admin Management` and `Authentication & Authorization` sit underneath everything — they provision the Farms/Kiosks/Roles/Users that the runtime (kiosk-facing) modules depend on, but have no reverse dependency on them.
+- `Admin Management` and `Authentication & Authorization` sit underneath everything — they provision the Facilities/Kiosks/Roles/Users that the runtime (kiosk-facing) modules depend on, but have no reverse dependency on them.
 - `Visitor Sync` is the only inbound integration point for pre-approved visitors; it hands off to `Visitor Registration` via a token, which hands off to `Kiosk Entry` via a now-recognizable face/QR.
 - `Kiosk Self-Service` is a parallel, self-contained path that bypasses both `Visitor Sync` and `Visitor Registration` entirely — Gatesale/Truck visitors are created and registered at the kiosk itself, then immediately reuse `Kiosk Entry`'s `processEntry` state machine.
 - `Face Matching` is a pure dependency of three modules, with no dependencies of its own.
@@ -884,9 +956,9 @@ employee_type ──┘         │           │        │
                            │           │
                            │           ├──▶ face_profile (embedding[], is_active)
                            │           │
-                           │           └──▶ visitor_request ──┬──▶ farm_list
+                           │           └──▶ visitor_request ──┬──▶ facility_list (was farm_list until 2026-08-27 cutover)
                            │                     │              │
-                           │                     │              └──▶ visitor_session ──▶ visitor_entry_logs ──▶ kiosk_device
+                           │                     │              └──▶ visitor_session ──▶ visitor_entry_logs ──▶ kiosk_device ──▶ facility_list
                            │                     │
                            │                     └── (registration flow only) registration_token, qr_url
                            │
@@ -894,10 +966,21 @@ employee_type ──┘         │           │        │
                                       │
                                       └──▶ users
 
-farm_list ──┬──▶ farm_aliases
-            ├──▶ kiosk_device
-            ├──▶ downtime_matrix (origin_farm_id, destination_farm_id — self-referential via farm_list; renamed from biosecurity_rules, area_type column dropped)
-            └──▶ downtime_stationary (assigned_farm_id — single FK to farm_list, one row per farm)
+facility_type ──┐
+                ├──▶ facility_list ──┬──▶ facility_aliases
+facility_category ──┘                ├──▶ visitor_request.facility_id (RESTRICT)
+                                      ├──▶ kiosk_device.facility_id (CASCADE)
+                                      ├──▶ downtime_matrix.origin_facility_id / destination_facility_id (CASCADE, self-referential)
+                                      └──▶ downtime_stationary.assigned_facility_id (CASCADE)
+(all four FKs above are live since the 2026-08-27 cutovers — Phase 2 for
+ visitor_request/kiosk_device, Phase 4 for downtime_matrix/downtime_stationary;
+ admin CRUD for facility_list/facility_aliases themselves added in Phase 3)
+
+farm_list ──▶ farm_aliases
+(as of the 2026-08-27 cutovers, farm_list/farm_aliases have ZERO remaining
+ live FKs from any other table AND no admin UI (Phase 5 removed the Farms/
+ Farm Aliases screens entirely) — pure legacy data, kept only as a rollback
+ safety layer, nothing in the application reads or writes them)
 
 (cross-cutting) audit_logs — one row per create/update/delete on any Auditable model, FK to users.user_id (nullable)
 api_logs — one row per Visitor Sync call and per Google Sheets write attempt
@@ -908,16 +991,17 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 - **`user_directory`** — Purpose: the canonical "person" record (visitor, employee, contractor, etc.). Key: `directory_id`. Notable columns: `identity_type_id` (required FK — drives `routeByIdentity()`'s branching), `person_reference` (a synthetic uniqueness key, not always email), `full_name`/`email`/`phone`. **Created by:** Visitor Sync, Visitor Registration (indirectly, via directory-reuse), Kiosk Self-Service registration. **Updated by:** Kiosk Self-Service `update-details`, Visitor Registration (face-link confirmation repoints `visitor_request.directory_id`, not this table). **Read by:** everything. As of migration `2026_08_12_115846`, `visitor_type_id`/`company`/`plate_no` were **removed** from this table and now live exclusively on `visitor_profile` — if you see old code/docs referencing those columns directly on `UserDirectory`, they are stale.
 - **`visitor_profile`** — Purpose: visitor-specific attributes, 1:1 with `user_directory` (unique `directory_id`). **Sole source of truth** for `visitor_type_id`/`company`/`plate_no` since the migration above. Cascade-deletes with its directory.
 - **`face_profile`** — Purpose: one or more biometric templates per directory. Key: `face_profile_id`. `embedding` is a JSON array of floats (128-D, `face-api.js` convention). `is_active` gates whether `FaceMatchingService` considers it.
-- **`visitor_request`** — Purpose: one specific approved (or self-service) visit. Key: `visitor_request_id`. Status fields: `approval_status` (`Approved` is the only value seen in code — no rejection/pending flow implemented for the Sync path), `request_status` (`ACTIVE`/`COMPLETED`/`COMPLETED_AUTO`/`INCOMPLETE`), `face_registration_status` (`PENDING`/`REGISTERED`/`FAILED_MATCH`). `visitor_id` is the AppSheet-issued idempotency key and QR payload (nullable — self-service requests have none). `registration_token` nullable (self-service requests have none). **Created by:** Visitor Sync, Kiosk Self-Service. **Updated by:** Kiosk Entry (`processEntry`), Session Auto-Resolution, Visitor Registration (re-pointing `directory_id` on a confirmed match).
+- **`visitor_request`** — Purpose: one specific approved (or self-service) visit. Key: `visitor_request_id`. Status fields: `approval_status` (`Approved` is the only value seen in code — no rejection/pending flow implemented for the Sync path), `request_status` (`ACTIVE`/`COMPLETED`/`COMPLETED_AUTO`/`INCOMPLETE`), `face_registration_status` (`PENDING`/`REGISTERED`/`FAILED_MATCH`). `visitor_id` is the AppSheet-issued idempotency key and QR payload (nullable — self-service requests have none). `registration_token` nullable (self-service requests have none). **Created by:** Visitor Sync, Kiosk Self-Service. **Updated by:** Kiosk Entry (`processEntry`), Session Auto-Resolution, Visitor Registration (re-pointing `directory_id` on a confirmed match). As of migration `2026_08_27_120001`, its site-binding column is `facility_id` (FK → `facility_list.facility_id`, `RESTRICT` on delete) — **not** `farm_id`/`farm_list` anymore; `facility()` replaces the old `farm()` relation.
 - **`visitor_session`** — Purpose: one physical "inside the farm" episode per request (a request can have more than one session over its lifetime, e.g. multiple temporary-exit/return cycles do NOT create new sessions — a session persists across those; only `final_exit`/auto-resolution closes it). Key: `visitor_session_id`. `login_id`/`logout_id` are independently generated 8-char codes, never assumed equal, unique across the whole table (checked against both columns to avoid cross-collision).
 - **`visitor_entry_logs`** — Purpose: immutable append-only log of every individual movement event (`First Entry`/`Temporary Exit`/`Return`/`Final Exit`, each with `IN`/`OUT` + timestamp + optional photo). No `updated_at` (`$timestamps = false`). Never updated after creation, only inserted.
-- **`kiosk_device`** — Purpose: one physical tablet, tied to exactly one `farm_id`. `kiosk_token` is the bearer credential for all `kiosk.auth`-gated routes, auto-generated on create, rotatable via admin.
-- **`farm_list`** / **`farm_aliases`** — Purpose: canonical farm records and alternate spellings AppSheet might send; aliases exist specifically to avoid fuzzy matching in `FarmResolver`.
-- **`downtime_matrix`** (renamed from `biosecurity_rules` on 2026-08-26; `area_type` column dropped that same day; `access_level` column dropped in a follow-up migration the same day; `minimum_downtime`/`maximum_downtime` widened from `INTEGER` to `DECIMAL(6,2)` and a `UNIQUE(origin_farm_id, destination_farm_id)` constraint added on 2026-08-27) — Purpose: origin→destination farm downtime pairs, one rule per farm-pair. Key: `rule_id`. Columns: `origin_farm_id`, `destination_farm_id` (both FK → `farm_list.farm_id`, jointly unique), `minimum_downtime`/`maximum_downtime` (nullable `DECIMAL(6,2)`, supports fractional hours), `is_active`. Model: `App\Models\DowntimeMatrix`. Both FormRequests enforce the composite uniqueness pre-save (`Rule::unique('downtime_matrix')->where(...)`) so a duplicate farm-pair surfaces as a normal 422 validation error rather than a raw DB constraint violation. **Not currently read by any business logic** — reference data ahead of a not-yet-built feature (`NEEDS VERIFICATION`).
-- **`downtime_stationary`** (new table, 2026-08-26; columns renamed from `minimum_downtime_hours`/`max_downtime_hours` to `minimum_downtime`/`maximum_downtime` and widened from `DECIMAL(5,2)` to `DECIMAL(6,2)`, plus a `UNIQUE(assigned_farm_id)` constraint added, on 2026-08-27) — Purpose: a fixed min/max downtime window assigned to a single farm, one rule per farm (no origin/destination pairing, unlike Downtime Matrix). Key: `rule_id`. Columns: `assigned_farm_id` (FK → `farm_list.farm_id`, unique), `minimum_downtime`/`maximum_downtime` (nullable `DECIMAL(6,2)`), `is_active`. Model: `App\Models\DowntimeStationary`. Sibling submodule to Downtime Matrix under the same Biosecurity Rules module/permission; both FormRequests validate `assigned_farm_id` uniqueness pre-save the same way Downtime Matrix does. **Not currently read by any business logic**, same as Downtime Matrix (`NEEDS VERIFICATION`).
+- **`kiosk_device`** — Purpose: one physical tablet, tied to exactly one facility. `kiosk_token` is the bearer credential for all `kiosk.auth`-gated routes, auto-generated on create, rotatable via admin. As of migration `2026_08_27_120002`, its site-binding column is `facility_id` (FK → `facility_list.facility_id`, `CASCADE` on delete) — **not** `farm_id`/`farm_list` anymore; `facility()` replaces the old `farm()` relation, and the Kiosk Devices admin screen's dropdown now lists `FacilityList::all()`.
+- **`farm_list`** / **`farm_aliases`** — Purpose (historical): canonical farm records and alternate spellings AppSheet might send; aliases existed specifically to avoid fuzzy matching in the service that resolved them. **As of the 2026-08-27 cutovers (Phases 2 and 4), and the Phase 5 removal of the Farms/Farm Aliases admin CRUD, nothing in the application reads or writes these two tables at all** — no runtime module, no admin UI, no remaining FKs from any other table into `farm_list`. They are pure legacy data, deliberately kept (not dropped) per the source instructions' rollback guidance, with their `FarmList`/`FarmAlias` Eloquent models also left in place (unused, but harmless) since the tables still exist.
+- **`downtime_matrix`** (renamed from `biosecurity_rules` on 2026-08-26; `area_type` column dropped that same day; `access_level` column dropped in a follow-up migration the same day; `minimum_downtime`/`maximum_downtime` widened from `INTEGER` to `DECIMAL(6,2)` and a `UNIQUE(origin_farm_id, destination_farm_id)` constraint added on 2026-08-27; `origin_farm_id`/`destination_farm_id` renamed and repointed to `origin_facility_id`/`destination_facility_id` → `facility_list.facility_id` later the same day, Phase 4) — Purpose: origin→destination facility downtime pairs, one rule per facility-pair (a FARM, PLANT, DC_WAREHOUSE, or OTHER facility on either side, not only a farm). Key: `rule_id`. Columns: `origin_facility_id`, `destination_facility_id` (both FK → `facility_list.facility_id`, `CASCADE` on delete, jointly unique via the explicitly-named `downtime_matrix_origin_dest_facility_unique` constraint — Laravel's auto-generated name for this pair exceeds MySQL's 64-char identifier limit), `minimum_downtime`/`maximum_downtime` (nullable `DECIMAL(6,2)`, supports fractional hours), `is_active`. Model: `App\Models\DowntimeMatrix` (`originFacility()`/`destinationFacility()` relations, renamed from `originFarm()`/`destinationFarm()`). Both FormRequests enforce the composite uniqueness pre-save (`Rule::unique('downtime_matrix')->where(...)`) so a duplicate facility-pair surfaces as a normal 422 validation error rather than a raw DB constraint violation. **Not currently read by any business logic** — reference data ahead of a not-yet-built feature (`NEEDS VERIFICATION`); the Phase 4 cutover changed only the master-data relationship, not this fact.
+- **`downtime_stationary`** (new table, 2026-08-26; columns renamed from `minimum_downtime_hours`/`max_downtime_hours` to `minimum_downtime`/`maximum_downtime` and widened from `DECIMAL(5,2)` to `DECIMAL(6,2)`, plus a `UNIQUE(assigned_farm_id)` constraint added, on 2026-08-27; `assigned_farm_id` renamed and repointed to `assigned_facility_id` → `facility_list.facility_id` later the same day, Phase 4) — Purpose: a fixed min/max downtime window assigned to a single facility, one rule per facility (no origin/destination pairing, unlike Downtime Matrix). Key: `rule_id`. Columns: `assigned_facility_id` (FK → `facility_list.facility_id`, `CASCADE` on delete, unique), `minimum_downtime`/`maximum_downtime` (nullable `DECIMAL(6,2)`), `is_active`. Model: `App\Models\DowntimeStationary` (`assignedFacility()` relation, renamed from `assignedFarm()`). Sibling submodule to Downtime Matrix under the same Biosecurity Rules module/permission; both FormRequests validate `assigned_facility_id` uniqueness pre-save the same way Downtime Matrix does. **Not currently read by any business logic**, same as Downtime Matrix (`NEEDS VERIFICATION`); had zero rows at the time of the Phase 4 cutover, so nothing needed backfilling.
 - **`role` / `permission` / `role_permissions` / `users`** — Purpose: RBAC. One role per user; permissions are string keys (`resource.action` convention) checked via `User::hasPermission()`.
 - **`audit_logs`** — Purpose: append-only change log, see the Audit Logging module.
 - **`api_logs`** — Purpose: append-only integration call log, shared by Visitor Sync and Google Sheets Integration (both write to the same table, distinguished by `endpoint`).
+- **`facility_type`** / **`facility_category`** / **`facility_list`** / **`facility_aliases`** (new tables, 2026-08-27 — see the "Facility Master Data" module above) — Purpose: normalized, multi-brand replacement structure for `farm_list`/`farm_aliases`, seeded with real reference data (8 types, 4 categories, 16 facilities). **As of the same-day Phase 2 cutover, this is now the live, authoritative site-binding target** for `visitor_request.facility_id` and `kiosk_device.facility_id`, and the resolution target for Visitor Sync's `FacilityResolver`. `facility_list.facility_code` is real for the 8 facilities that correspond to a `farm_list` row, still placeholder (`TYPE-SLUG`) for the other 8. No admin CRUD exists for any of these 4 tables yet.
 
 ---
 
@@ -955,7 +1039,7 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 
 ### Authenticated admin panel (`routes/web.php`, `auth` + `permission:<key>`)
 
-Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/farms`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, `admin/farm-aliases`, and `admin/audit-logs` (`index` only — read-only). `admin/biosecurity-rules` is a `GET`-only landing route (`biosecurity-rules.index`, two-card partial, no CRUD of its own); its two submodules are full resource routes nested under it: `admin/biosecurity-rules/downtime-matrix` (route names `downtime-matrix.*`) and `admin/biosecurity-rules/downtime-stationary` (route names `downtime-stationary.*`). See §2's Admin Management module for the permission-key mapping and the submodule load flow.
+Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/facilities`, `admin/facility-aliases`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, and `admin/audit-logs` (`index` only — read-only). `admin/biosecurity-rules` is a `GET`-only landing route (`biosecurity-rules.index`, two-card partial, no CRUD of its own); its two submodules are full resource routes nested under it: `admin/biosecurity-rules/downtime-matrix` (route names `downtime-matrix.*`) and `admin/biosecurity-rules/downtime-stationary` (route names `downtime-stationary.*`). See §2's Admin Management module for the permission-key mapping and the submodule load flow. `admin/farms`/`admin/farm-aliases` were removed 2026-08-27 (Phase 5) along with the legacy Farm admin module — see "Facility Master Data."
 
 ### Auth endpoints (`routes/web.php`, public)
 
@@ -1033,7 +1117,7 @@ Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`dest
 12. **QR payload is always the raw `visitor_id`** (Visitor Registration / Kiosk) — never re-encode anything else without updating both the generator and every scanner call site.
 13. **RBAC is enforced twice (Admin Management):** route middleware (`permission:<key>`) and FormRequest `authorize()` must both check the same key — this is intentional defense-in-depth, not redundant code to simplify away.
 14. **Audit trail is automatic and synchronous** for every `Auditable` model — do not remove the trait from a business-entity model without a deliberate, discussed reason.
-15. **Biosecurity Rules uniqueness (Admin Management):** `downtime_matrix` allows at most one rule per `(origin_farm_id, destination_farm_id)` pair; `downtime_stationary` allows at most one rule per `assigned_farm_id`. Both are enforced by a DB-level `UNIQUE` constraint (added 2026-08-27) and mirrored in the FormRequest validation layer so violations surface as a normal 422, not a raw SQL error — do not remove either layer independently.
+15. **Biosecurity Rules uniqueness (Admin Management):** `downtime_matrix` allows at most one rule per `(origin_facility_id, destination_facility_id)` pair; `downtime_stationary` allows at most one rule per `assigned_facility_id` (both columns renamed from `*_farm_id` in the 2026-08-27 Phase 4 cutover — FK now points at `facility_list`, not `farm_list`). Both are enforced by a DB-level `UNIQUE` constraint (added 2026-08-27) and mirrored in the FormRequest validation layer so violations surface as a normal 422, not a raw SQL error — do not remove either layer independently.
 
 ---
 
@@ -1098,7 +1182,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 
 | Module | Critical Files |
 |---|---|
-| Visitor Sync | `app/Http/Controllers/Api/VisitorSyncController.php`, `app/Services/VisitorSyncService.php`, `app/Services/FarmResolver.php`, `app/Http/Requests/Api/VisitorSyncRequest.php`, `app/Http/Middleware/VerifyApiKey.php` |
+| Visitor Sync | `app/Http/Controllers/Api/VisitorSyncController.php`, `app/Services/VisitorSyncService.php`, `app/Services/FacilityResolver.php` (renamed from `FarmResolver.php` on 2026-08-27), `app/Http/Requests/Api/VisitorSyncRequest.php`, `app/Http/Middleware/VerifyApiKey.php` |
 | Visitor Registration | `app/Http/Controllers/Visitor/RegistrationController.php`, `app/Services/VisitorRegistrationService.php`, `app/Services/Qr/VisitorQrCodeService.php` |
 | Kiosk Entry | `app/Http/Controllers/Kiosk/KioskController.php`, `app/Services/Kiosk/VisitorKioskService.php`, `app/Models/VisitorRequest.php`, `app/Models/VisitorSession.php`, `app/Http/Middleware/VerifyKioskToken.php` |
 | Kiosk Self-Service | `app/Http/Controllers/Kiosk/KioskController.php` (same file as Kiosk Entry), `app/Models/VisitorProfile.php` |
@@ -1106,6 +1190,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 | Google Sheets Integration | `app/Services/GoogleSheets/GoogleSheetsClient.php`, `app/Services/GoogleSheets/VisitorSheetWriter.php`, `app/Providers/AppServiceProvider.php` |
 | Session Auto-Resolution | `app/Console/Commands/ResolveExpiredVisitorSessions.php`, `routes/console.php` |
 | Biosecurity Rules (Downtime Matrix / Downtime Stationary) | `app/Http/Controllers/Admin/BiosecurityRuleController.php` (landing/cards only), `app/Http/Controllers/Admin/DowntimeMatrixController.php`, `app/Http/Controllers/Admin/DowntimeStationaryController.php`, `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php` |
+| Facility Master Data | `app/Models/{FacilityType,FacilityCategory,FacilityList,FacilityAlias}.php`, `app/Services/FacilityResolver.php`, `app/Http/Controllers/Admin/{Facility,FacilityAlias}Controller.php`, `database/seeders/Facility{Type,Category,List}Seeder.php`, `database/migrations/2026_08_27_110000_*` through `..._120002_*` |
 | Admin Management | `app/Http/Controllers/Admin/*.php`, `app/Http/Requests/Admin/*.php`, `app/Services/{AuthService,RolePermissionService,AuditLogService}.php` |
 | Authentication & Authorization | `app/Http/Controllers/Auth/LoginController.php`, `app/Services/AuthService.php`, `app/Http/Middleware/CheckPermission.php`, `app/Models/User.php` |
 | Audit Logging | `app/Traits/Auditable.php`, `app/Models/AuditLog.php` |
@@ -1139,12 +1224,16 @@ Effectively constant: always `Approved` in every code path that creates a reques
 |---|---|---|---|---|---|---|
 | 1 | Kiosk Self-Service | `VisitorType` rows (Visitor/Gatesale/Truck) have no seeder and no admin CRUD | Must be created manually (DB/tinker) in every environment | New/rebuilt environments will have a non-functional Self-Service and even Sync flow until someone manually inserts these rows | `database/seeders/`, `app/Http/Controllers/Admin/` (absence) | CONFIRMED (absence verified directly) |
 | 2 | Visitor Registration | `visitor_request.qr_url` (from AppSheet) is stored but not rendered/downloaded anywhere — the success page generates its own QR locally from `visitor_id` instead | Column appears write-only in current UI | Possibly dead data, or used by a system outside this codebase | `app/Http/Controllers/Visitor/RegistrationController.php::qrCode`, `resources/views/visitor/success.blade.php` | NEEDS VERIFICATION |
-| 3 | Admin Management | `DowntimeMatrix`, `DowntimeStationary` (the two Biosecurity Rules submodules, formerly the single `BiosecurityRule`/`biosecurity_rules` table) and `EmployeeType` are fully modeled/administrable but not read by any business logic | Rules can be created but have no runtime effect | Confusing to an admin who expects biosecurity rules to actually gate something; likely intended for a not-yet-built feature | `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php`, `app/Models/EmployeeType.php` | NEEDS VERIFICATION |
+| 3 | Admin Management | `DowntimeMatrix`, `DowntimeStationary` (the two Biosecurity Rules submodules, formerly the single `BiosecurityRule`/`biosecurity_rules` table) and `EmployeeType` are fully modeled/administrable but not read by any business logic — still true after the 2026-08-27 Phase 4 cutover moved their FKs from `farm_list` to `facility_list`; that change was master-data only, no new logic was added | Rules can be created but have no runtime effect | Confusing to an admin who expects biosecurity rules to actually gate something; likely intended for a not-yet-built feature | `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php`, `app/Models/EmployeeType.php` | NEEDS VERIFICATION |
 | 4 | Kiosk (Employee identity) | `routeByIdentity()` hard-codes a placeholder "not yet available" response for Employee identity type | Employees cannot use the kiosk at all today | Feature gap, not a bug — flagged since Employee-type reference data (EmployeeType) already exists, suggesting this was planned | `app/Http/Controllers/Kiosk/KioskController.php::routeByIdentity` | CONFIRMED (explicit placeholder in code) |
 | 5 | Authentication | `max_login_attempts`/`lockout_duration`/`password_min_length` are defined in `config/sentry.php` but nothing in the codebase reads them | No login throttling/lockout is actually enforced despite config suggesting it should be | A brute-force login attempt is not currently rate-limited by this app | `config/sentry.php`, `app/Http/Controllers/Auth/LoginController.php`, `app/Services/AuthService.php` | NEEDS VERIFICATION (absence of usage confirmed via search; confirm no global throttle middleware applies) |
 | 6 | Kiosk (frontend) | Face/QR recognition libraries are loaded live from external CDNs inside the kiosk Blade view, not vendored/bundled | Kiosk recognition fully depends on CDN + internet availability | A CDN or network outage disables face/QR recognition kiosk-wide even if the Laravel app itself is healthy | `resources/views/kiosk/show.blade.php` | CONFIRMED |
 | 7 | Audit Logging | No retention/pruning job for `audit_logs`/`api_logs`; both are cross-cut by very high-frequency kiosk activity | Tables grow unboundedly | Long-term storage/performance risk for `AuditLogController::index` and general DB size | `app/Traits/Auditable.php`, `app/Models/ApiLog.php` | NEEDS VERIFICATION (no code inspected suggests any pruning; not proven to be a problem yet at current scale) |
 | 8 | Session Auto-Resolution | `VisitorEntryLog` is not `Auditable` and has no `updated_at` | High-frequency kiosk events aren't separately audit-logged beyond their own `datetime` column | Possibly intentional (avoid double logging); flag if compliance requirements are raised | `app/Models/VisitorEntryLog.php` | NEEDS VERIFICATION |
+| 9 | Facility Master Data | ~~No admin CRUD for `facility_list`/`facility_aliases`~~ **RESOLVED 2026-08-27 (Phase 3)** — `admin/facilities`/`admin/facility-aliases` now exist, gated by `facilities.manage` | Facilities and facility aliases can now be created/edited/deleted through the admin panel | N/A — closed | `app/Http/Controllers/Admin/{Facility,FacilityAlias}Controller.php` | RESOLVED |
+| 10 | Admin Management | ~~Two visually similar site-management screens (`admin/farms` vs `admin/facilities`), only one with runtime effect~~ **RESOLVED 2026-08-27 (Phase 5)** — the legacy `FarmController`/`FarmAliasController`, their Requests, views, routes, and nav links were removed entirely; `admin/facilities`/`admin/facility-aliases` are now the only site-management screens. `farm_list`/`farm_aliases` remain in the DB as inert legacy data (no admin UI, no code path) | N/A — closed | `app/Http/Controllers/Admin/{Facility,FacilityAlias}Controller.php` | RESOLVED |
+| 11 | Admin Management (all resources) | Every Admin controller's private `view()` helper falls back to re-rendering the full `index` page for a non-AJAX request, but `create()`/`edit()` never pass that page's required paginated-list variable (e.g. `FacilityController::edit()` doesn't pass `$facilities`) — a direct, non-AJAX `GET admin/facilities/{id}/edit` throws `ViewException: Undefined variable $facilities` | A plain browser request to an edit/create URL (bypassing the AJAX nav) crashes instead of rendering | Never triggered in real use — `public/js/admin.js` sends `X-Requested-With: XMLHttpRequest` on every `.ajax-link`/`.ajax-form` interaction, so `request()->ajax()` is always true in practice; only surfaces via a raw URL visit or a test that calls `get()` without the header (discovered while writing `FacilityAdminTest`) | Every `Admin\*Controller` with this `view()` pattern (`FacilityController`, `KioskDeviceController`, `DowntimeMatrixController`, etc.) | CONFIRMED (reproduced directly); pre-existing, not introduced by the facility work |
+| 12 | Admin Management (dashboard) | `resources/views/admin/dashboard.blade.php` and `dashboard-content.blade.php` still show a "Farms" stat tile calling `\App\Models\FarmList::count()`, left in place when the Farms admin screen was removed (Phase 5) | The tile still renders a live count (currently 8) but no longer links to anything — there's no `admin/farms` screen left to navigate to | Cosmetic only — `FarmList` model and `farm_list` table both still exist, so nothing errors; just a stale/orphaned stat an admin might click expecting a screen | `resources/views/admin/dashboard.blade.php`, `resources/views/admin/dashboard-content.blade.php` | CONFIRMED (found during Phase 5 decommissioning; deliberately left out of scope, not fixed) |
 
 Do not fix any of these unless explicitly asked.
 
@@ -1156,7 +1245,7 @@ Do not fix any of these unless explicitly asked.
 If the request is about Visitor Sync / the AppSheet integration:
     Read §2 "Visitor Sync" + its critical files
     ↓
-    Check FarmResolver's alias rules before touching farm matching
+    Check FacilityResolver's alias rules before touching facility matching (renamed from FarmResolver on 2026-08-27)
     ↓
     Check the directory-reuse rule (full_name+email) before touching dedup logic
     ↓
@@ -1201,7 +1290,7 @@ If the request is about Google Sheets:
     ↓
     Update this file if row format/columns or spreadsheet structure changes
 
-If the request is about Admin Management (Farms/Kiosks/Roles/Users/reference data):
+If the request is about Admin Management (Facilities/Kiosks/Roles/Users/reference data):
     Read §2 "Admin Management" + "Authentication & Authorization"
     ↓
     Follow the existing controller/request/service pattern exactly (every resource looks the same)
@@ -1227,13 +1316,13 @@ If the request is about the scheduled cleanup job:
 ## 17. System Quick Reference
 
 ### Modules
-Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck) · Face Matching · Google Sheets Integration · Session Auto-Resolution · Admin Management · Authentication & Authorization · Audit Logging (cross-cutting)
+Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck) · Face Matching · Google Sheets Integration · Session Auto-Resolution · Facility Master Data (live site-binding target since the 2026-08-27 cutover) · Admin Management · Authentication & Authorization · Audit Logging (cross-cutting)
 
 ### Main APIs
 `POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` · `/register/visitor/*` (public) · `/admin/*` (authenticated resource routes) · `/login`, `/logout`
 
 ### Main Data Entities
-`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` · `visitor_session` · `visitor_entry_logs` · `kiosk_device` · `farm_list` / `farm_aliases` · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
+`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` (site-bound via `facility_id`) · `visitor_session` · `visitor_entry_logs` · `kiosk_device` (site-bound via `facility_id`) · `facility_type` / `facility_category` / `facility_list` / `facility_aliases` (live site-binding target for `visitor_request`, `kiosk_device`, `downtime_matrix`, and `downtime_stationary` since 2026-08-27, now with a full admin CRUD) · `farm_list` / `farm_aliases` (pure legacy data as of 2026-08-27 Phase 5 — no admin UI, no remaining FKs, `FarmList`/`FarmAlias` models kept but unused) · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`, facility-based since the 2026-08-27 Phase 4 cutover) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
 
 ### External Systems
 AppSheet (inbound webhook, one-way) · Google Sheets API (outbound write, one-way) · `face-api.js` + `jsQR` (client-side, CDN-loaded)
@@ -1242,7 +1331,7 @@ AppSheet (inbound webhook, one-way) · Google Sheets API (outbound write, one-wa
 Directory merge requires full_name+email match · No fuzzy farm matching · Terminal request states are permanent · Farm binding double-enforced · Gatesale/Truck: one active visit globally, guarded by a directory-keyed lock · Google Sheets writes excluded for Gatesale/Truck and always best-effort/non-blocking · Session Auto-Resolution never fabricates recovered times · Biometric conflict never blocks QR entry · RBAC checked at both route and FormRequest layers · Downtime Matrix/Stationary uniqueness enforced at both DB and FormRequest layers
 
 ### Critical Constraints
-Face matching is an unindexed linear PHP scan · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap)
+Face matching is an unindexed linear PHP scan · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap, unlike `facility_list`, which got one 2026-08-27) · every Admin controller's `view()` fallback for `create()`/`edit()` on a non-AJAX request throws (never triggered in real use, see Known Issue #11)
 
 ### Most Important Files
 `app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php`

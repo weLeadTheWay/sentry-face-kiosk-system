@@ -240,10 +240,6 @@
                     <li><a href="{{ route('facilities.index') }}" class="ajax-link">Facilities</a></li>
                     <li><a href="{{ route('facility-aliases.index') }}" class="ajax-link">Facility Aliases</a></li>
                 @endif
-                @if(auth()->user()->hasPermission('farms.manage'))
-                    <li><a href="{{ route('farms.index') }}" class="ajax-link">Farms</a></li>
-                    <li><a href="{{ route('farm-aliases.index') }}" class="ajax-link">Farm Aliases</a></li>
-                @endif
                 @if(auth()->user()->hasPermission('kiosks.manage'))
                     <li><a href="{{ route('kiosks.index') }}" class="ajax-link">Kiosks</a></li>
                 @endif

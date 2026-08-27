@@ -39,7 +39,6 @@ Route::middleware('auth')->group(function () {
         return view('admin.dashboard');
     })->name('dashboard');
 
-    Route::resource('admin/farms', \App\Http\Controllers\Admin\FarmController::class)->middleware('permission:farms.manage');
     Route::resource('admin/kiosks', \App\Http\Controllers\Admin\KioskDeviceController::class)->middleware('permission:kiosks.manage');
     Route::post('admin/kiosks/{kiosk}/regenerate-token', [\App\Http\Controllers\Admin\KioskDeviceController::class, 'regenerateToken'])->name('kiosks.regenerate-token')->middleware('permission:kiosks.manage');
     Route::resource('admin/identity-types', \App\Http\Controllers\Admin\IdentityTypeController::class)->middleware('permission:identity_types.manage')->parameter('identity_type', 'identity_type');
@@ -52,7 +51,6 @@ Route::middleware('auth')->group(function () {
     Route::post('admin/roles/{role}/permissions', [\App\Http\Controllers\Admin\RoleController::class, 'updatePermissions'])->name('roles.updatePermissions')->middleware('permission:roles.manage');
     Route::resource('admin/users', \App\Http\Controllers\Admin\UserController::class)->middleware('permission:users.manage');
     Route::resource('admin/audit-logs', \App\Http\Controllers\Admin\AuditLogController::class)->middleware('permission:audit_logs.view')->only('index');
-    Route::resource('admin/farm-aliases', \App\Http\Controllers\Admin\FarmAliasController::class)->middleware('permission:farms.manage')->parameter('farm_alias', 'farm_alias');
     Route::resource('admin/facilities', \App\Http\Controllers\Admin\FacilityController::class)->middleware('permission:facilities.manage');
     Route::resource('admin/facility-aliases', \App\Http\Controllers\Admin\FacilityAliasController::class)->middleware('permission:facilities.manage')->parameter('facility_alias', 'facility_alias');
 });
