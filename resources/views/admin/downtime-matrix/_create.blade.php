@@ -5,9 +5,9 @@
 
         <div class="form-group @error('destination_farm_id') has-error @enderror"><label for="destination_farm_id">Destination Farm *</label><select id="destination_farm_id" name="destination_farm_id" required>@foreach($farms as $f)<option value="{{ $f->farm_id }}">{{ $f->farm_name }}</option>@endforeach</select>@error('destination_farm_id')<div class="error-message">{{ $message }}</div>@enderror</div>
 
-        <div class="form-group @error('minimum_downtime') has-error @enderror"><label for="minimum_downtime">Minimum Downtime (hours)</label><input type="number" id="minimum_downtime" name="minimum_downtime">@error('minimum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
+        <div class="form-group @error('minimum_downtime') has-error @enderror"><label for="minimum_downtime">Minimum Downtime (hours)</label><input type="number" step="0.01" id="minimum_downtime" name="minimum_downtime">@error('minimum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
 
-        <div class="form-group @error('maximum_downtime') has-error @enderror"><label for="maximum_downtime">Maximum Downtime (hours)</label><input type="number" id="maximum_downtime" name="maximum_downtime">@error('maximum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
+        <div class="form-group @error('maximum_downtime') has-error @enderror"><label for="maximum_downtime">Maximum Downtime (hours)</label><input type="number" step="0.01" id="maximum_downtime" name="maximum_downtime">@error('maximum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
 
         <div class="form-group"><label><input type="hidden" name="is_active" value="0"><input type="checkbox" name="is_active" value="1" checked> Active</label></div>
 

@@ -14,10 +14,17 @@ class StoreDowntimeStationaryRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'assigned_farm_id' => 'required|exists:farm_list,farm_id',
-            'minimum_downtime_hours' => 'nullable|numeric|min:0|max:999.99',
-            'max_downtime_hours' => 'nullable|numeric|min:0|max:999.99',
+            'assigned_farm_id' => 'required|exists:farm_list,farm_id|unique:downtime_stationary,assigned_farm_id',
+            'minimum_downtime' => 'nullable|numeric|min:0|max:9999.99',
+            'maximum_downtime' => 'nullable|numeric|min:0|max:9999.99',
             'is_active' => 'boolean',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'assigned_farm_id.unique' => 'This farm already has a downtime stationary rule assigned.',
         ];
     }
 }

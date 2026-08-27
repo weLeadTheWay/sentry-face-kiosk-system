@@ -34,7 +34,7 @@
 
         <div class="form-group @error('minimum_downtime') has-error @enderror">
             <label for="minimum_downtime">Minimum Downtime (hours)</label>
-            <input type="number" id="minimum_downtime" name="minimum_downtime" value="{{ old('minimum_downtime', $downtime_matrix->minimum_downtime) }}">
+            <input type="number" step="0.01" id="minimum_downtime" name="minimum_downtime" value="{{ old('minimum_downtime', $downtime_matrix->minimum_downtime) }}">
             @error('minimum_downtime')
                 <div class="error-message">{{ $message }}</div>
             @enderror
@@ -42,7 +42,7 @@
 
         <div class="form-group @error('maximum_downtime') has-error @enderror">
             <label for="maximum_downtime">Maximum Downtime (hours)</label>
-            <input type="number" id="maximum_downtime" name="maximum_downtime" value="{{ old('maximum_downtime', $downtime_matrix->maximum_downtime) }}">
+            <input type="number" step="0.01" id="maximum_downtime" name="maximum_downtime" value="{{ old('maximum_downtime', $downtime_matrix->maximum_downtime) }}">
             @error('maximum_downtime')
                 <div class="error-message">{{ $message }}</div>
             @enderror

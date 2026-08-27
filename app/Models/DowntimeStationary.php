@@ -17,8 +17,8 @@ class DowntimeStationary extends Model
 
     protected $fillable = [
         'assigned_farm_id',
-        'minimum_downtime_hours',
-        'max_downtime_hours',
+        'minimum_downtime',
+        'maximum_downtime',
         'is_active',
     ];
 
@@ -26,8 +26,8 @@ class DowntimeStationary extends Model
     {
         return [
             'is_active' => 'boolean',
-            'minimum_downtime_hours' => 'decimal:2',
-            'max_downtime_hours' => 'decimal:2',
+            'minimum_downtime' => 'decimal:2',
+            'maximum_downtime' => 'decimal:2',
         ];
     }
 

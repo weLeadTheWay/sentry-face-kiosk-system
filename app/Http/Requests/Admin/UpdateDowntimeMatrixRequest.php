@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Admin;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateDowntimeMatrixRequest extends FormRequest
 {
@@ -14,11 +15,24 @@ class UpdateDowntimeMatrixRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'origin_farm_id' => 'required|exists:farm_list,farm_id',
+            'origin_farm_id' => [
+                'required',
+                'exists:farm_list,farm_id',
+                Rule::unique('downtime_matrix')
+                    ->where(fn ($query) => $query->where('destination_farm_id', $this->input('destination_farm_id')))
+                    ->ignore($this->route('downtime_matrix')),
+            ],
             'destination_farm_id' => 'required|exists:farm_list,farm_id',
-            'minimum_downtime' => 'nullable|integer|min:0',
-            'maximum_downtime' => 'nullable|integer|min:0',
+            'minimum_downtime' => 'nullable|numeric|min:0|max:9999.99',
+            'maximum_downtime' => 'nullable|numeric|min:0|max:9999.99',
             'is_active' => 'boolean',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'origin_farm_id.unique' => 'A downtime rule for this origin/destination farm pair already exists.',
         ];
     }
 }

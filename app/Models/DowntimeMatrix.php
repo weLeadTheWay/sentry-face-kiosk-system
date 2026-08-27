@@ -27,6 +27,8 @@ class DowntimeMatrix extends Model
     {
         return [
             'is_active' => 'boolean',
+            'minimum_downtime' => 'decimal:2',
+            'maximum_downtime' => 'decimal:2',
         ];
     }
 
