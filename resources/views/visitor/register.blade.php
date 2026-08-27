@@ -131,7 +131,7 @@
 
             @if(isset($visitorRequest))
                 <div style="margin-bottom: 30px; padding: 15px; background: #f9f9f9; border-radius: 4px;">
-                    <p style="font-size: 14px; color: #666;">Farm: <strong>{{ $visitorRequest->farm->farm_name }}</strong></p>
+                    <p style="font-size: 14px; color: #666;">Farm: <strong>{{ $visitorRequest->facility->facility_name }}</strong></p>
                     <p style="font-size: 14px; color: #666;">Host: <strong>{{ $visitorRequest->host_name }}</strong></p>
                 </div>
 

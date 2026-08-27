@@ -3,7 +3,7 @@
 namespace Tests\Feature\Kiosk;
 
 use App\Models\FaceProfile;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -16,14 +16,16 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class KioskIdentityRoutingTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private KioskDevice $kiosk;
-    private FarmList $farm;
+    private FacilityList $facility;
     private IdentityType $employeeType;
     private IdentityType $visitorIdentityType;
     private VisitorType $visitorType;
@@ -46,9 +48,9 @@ class KioskIdentityRoutingTest extends TestCase
         $this->gatesaleType = VisitorType::create(['visitor_type_name' => 'Gatesale']);
         $this->truckType = VisitorType::create(['visitor_type_name' => 'Truck']);
 
-        $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -103,7 +105,7 @@ class KioskIdentityRoutingTest extends TestCase
         return VisitorRequest::create(array_merge([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),
@@ -188,9 +190,9 @@ class KioskIdentityRoutingTest extends TestCase
 
     public function test_6_wrong_farm_is_unaffected_by_identity_routing(): void
     {
-        $otherFarm = FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        $otherFarm = $this->createFacility('BETA');
         $directory = $this->makeDirectoryWithFace(0.60);
-        $this->makeVisitorRequest($directory, ['farm_id' => $otherFarm->farm_id]);
+        $this->makeVisitorRequest($directory, ['facility_id' => $otherFarm->facility_id]);
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.60)]);
 

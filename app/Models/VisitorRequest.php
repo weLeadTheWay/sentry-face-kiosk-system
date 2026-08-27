@@ -21,7 +21,7 @@ class VisitorRequest extends Model
         'directory_id',
         'visitor_id',
         'qr_url',
-        'farm_id',
+        'facility_id',
         'host_name',
         'purpose',
         'origin',
@@ -107,9 +107,9 @@ class VisitorRequest extends Model
         return $this->isGatesale() || $this->isTruck();
     }
 
-    public function farm(): BelongsTo
+    public function facility(): BelongsTo
     {
-        return $this->belongsTo(FarmList::class, 'farm_id', 'farm_id');
+        return $this->belongsTo(FacilityList::class, 'facility_id', 'facility_id');
     }
 
     public function sessions(): HasMany

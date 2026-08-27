@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Kiosk;
 
-use App\Models\FarmList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -12,6 +11,7 @@ use App\Services\Kiosk\VisitorKioskService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 /**
@@ -30,6 +30,7 @@ use Tests\TestCase;
 class GoogleSheetsIntegrationTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     public function test_container_resolved_kiosk_service_actually_has_a_sheet_writer(): void
     {
@@ -56,9 +57,9 @@ class GoogleSheetsIntegrationTest extends TestCase
         $this->app->instance(GoogleSheetsClient::class, $mockClient);
 
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
+        $facility = $this->createFacility('ALPHA');
         $kiosk = KioskDevice::create([
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -74,7 +75,7 @@ class GoogleSheetsIntegrationTest extends TestCase
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),

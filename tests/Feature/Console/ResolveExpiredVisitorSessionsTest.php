@@ -2,7 +2,7 @@
 
 namespace Tests\Feature\Console;
 
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -15,13 +15,15 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class ResolveExpiredVisitorSessionsTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
-    private FarmList $farm;
+    private FacilityList $facility;
     private KioskDevice $kiosk;
     private UserDirectory $directory;
     private UserDirectory $gatesaleDirectory;
@@ -32,9 +34,9 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
 
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
         $gatesaleType = VisitorType::firstOrCreate(['visitor_type_name' => 'Gatesale']);
-        $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -69,7 +71,7 @@ class ResolveExpiredVisitorSessionsTest extends TestCase
         return VisitorRequest::create(array_merge([
             'directory_id' => $this->directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now()->subDay(),
             'departure_datetime' => now()->subDay(),

@@ -3,22 +3,23 @@
 namespace Tests\Feature\Visitor;
 
 use App\Models\FaceProfile;
-use App\Models\FarmList;
 use App\Models\IdentityType;
 use App\Models\UserDirectory;
 use App\Models\VisitorRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class VisitorRegistrationTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private function makeVisitorRequest(array $overrides = []): VisitorRequest
     {
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $facility = $this->createFacility('ALPHA');
 
         $email = 'juan+' . uniqid() . '@example.com';
         $directory = UserDirectory::create([
@@ -33,7 +34,7 @@ class VisitorRegistrationTest extends TestCase
         return VisitorRequest::create(array_merge([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),

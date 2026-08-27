@@ -8,10 +8,10 @@
         @method('PUT')
 
         <div class="form-group">
-            <label for="farm_id">Farm *</label>
-            <select id="farm_id" name="farm_id" required>
-                @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $kiosk_device->farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+            <label for="facility_id">Facility *</label>
+            <select id="facility_id" name="facility_id" required>
+                @foreach($facilities as $f)
+                    <option value="{{ $f->facility_id }}" {{ $f->facility_id == $kiosk_device->facility_id ? 'selected' : '' }}>{{ $f->facility_name }}</option>
                 @endforeach
             </select>
         </div>

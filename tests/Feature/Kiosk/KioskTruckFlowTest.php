@@ -3,7 +3,7 @@
 namespace Tests\Feature\Kiosk;
 
 use App\Models\FaceProfile;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -16,6 +16,7 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 /**
@@ -28,9 +29,10 @@ use Tests\TestCase;
 class KioskTruckFlowTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private KioskDevice $kiosk;
-    private FarmList $farm;
+    private FacilityList $facility;
     private IdentityType $visitorIdentityType;
     private VisitorType $gatesaleType;
     private VisitorType $truckType;
@@ -48,9 +50,9 @@ class KioskTruckFlowTest extends TestCase
         $this->gatesaleType = VisitorType::create(['visitor_type_name' => 'Gatesale']);
         $this->truckType = VisitorType::create(['visitor_type_name' => 'Truck']);
 
-        $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -94,7 +96,7 @@ class KioskTruckFlowTest extends TestCase
     {
         return VisitorRequest::create(array_merge([
             'directory_id' => $directory->directory_id,
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Existing Host',
             'origin' => 'Existing Origin',
             'purpose' => 'Existing Purpose',
@@ -265,9 +267,9 @@ class KioskTruckFlowTest extends TestCase
     // ---- 12, 13: ACTIVE in another farm is denied, no simultaneous visits ----
     public function test_existing_truck_active_in_another_farm_is_denied(): void
     {
-        $otherFarm = FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        $otherFarm = $this->createFacility('BETA');
         $directory = $this->makeTruckDirectory(0.32);
-        $this->makeActiveTruckRequest($directory, ['farm_id' => $otherFarm->farm_id]);
+        $this->makeActiveTruckRequest($directory, ['facility_id' => $otherFarm->facility_id]);
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.32)]);
 
@@ -407,7 +409,7 @@ class KioskTruckFlowTest extends TestCase
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),

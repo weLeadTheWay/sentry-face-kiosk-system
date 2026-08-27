@@ -67,7 +67,7 @@ class KioskController extends Controller
 
             $visitorRequest = $this->pickBestActiveRequest(
                 VisitorRequest::where('directory_id', $directory->directory_id)->activeToday(),
-                $kiosk->farm_id
+                $kiosk->facility_id
             );
 
             if (!$visitorRequest) {
@@ -84,7 +84,7 @@ class KioskController extends Controller
         if ($qrValue) {
             $visitorRequest = $this->pickBestActiveRequest(
                 VisitorRequest::where('visitor_id', $qrValue)->activeToday(),
-                $kiosk->farm_id
+                $kiosk->facility_id
             );
 
             if (!$visitorRequest) {
@@ -193,7 +193,7 @@ class KioskController extends Controller
         $activeRequest = $this->activeGatesaleRequestQuery($directory->directory_id)->first();
 
         if ($activeRequest) {
-            if ($activeRequest->farm_id !== $kiosk->farm_id) {
+            if ($activeRequest->facility_id !== $kiosk->facility_id) {
                 return $this->gatesaleActiveElsewhereResponse($activeRequest);
             }
 
@@ -229,7 +229,7 @@ class KioskController extends Controller
 
     private function gatesaleActiveElsewhereResponse(VisitorRequest $activeRequest): \Illuminate\Http\JsonResponse
     {
-        $activeFarmName = $activeRequest->farm->farm_name ?? 'another farm';
+        $activeFarmName = $activeRequest->facility->facility_name ?? 'another farm';
 
         return response()->json([
             'success' => false,
@@ -284,7 +284,7 @@ class KioskController extends Controller
                         ->first();
 
                     if ($existing) {
-                        if ($existing->farm_id !== $kiosk->farm_id) {
+                        if ($existing->facility_id !== $kiosk->facility_id) {
                             abort(403, 'This visitor is currently active at a different farm and cannot enter here until that visit ends.');
                         }
 
@@ -302,7 +302,7 @@ class KioskController extends Controller
 
                     return VisitorRequest::create([
                         'directory_id' => $directory->directory_id,
-                        'farm_id' => $kiosk->farm_id,
+                        'facility_id' => $kiosk->facility_id,
                         'host_name' => $hostName,
                         'origin' => $origin,
                         'purpose' => $purpose,
@@ -505,11 +505,11 @@ class KioskController extends Controller
      * specific reason ("different farm" / "already completed") rather than
      * a generic "not found".
      */
-    private function pickBestActiveRequest($query, int $kioskFarmId): ?VisitorRequest
+    private function pickBestActiveRequest($query, int $kioskFacilityId): ?VisitorRequest
     {
         return $query
             ->orderByRaw("request_status = 'COMPLETED'")
-            ->orderByRaw('farm_id != ?', [$kioskFarmId])
+            ->orderByRaw('facility_id != ?', [$kioskFacilityId])
             ->orderByDesc('visitor_request_id')
             ->first();
     }
@@ -521,8 +521,8 @@ class KioskController extends Controller
      */
     private function buildRecognitionResponse(VisitorRequest $visitorRequest, string $matchType, $directory, KioskDevice $kiosk)
     {
-        if ($visitorRequest->farm_id !== $kiosk->farm_id) {
-            $approvedFarmName = $visitorRequest->farm->farm_name ?? 'a different farm';
+        if ($visitorRequest->facility_id !== $kiosk->facility_id) {
+            $approvedFarmName = $visitorRequest->facility->facility_name ?? 'a different farm';
 
             return response()->json([
                 'success' => false,

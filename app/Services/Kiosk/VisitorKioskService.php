@@ -81,7 +81,7 @@ class VisitorKioskService
         // before the kiosk ever shows an action button, but this guard
         // guarantees no session/log/sheet write can ever happen for the
         // wrong farm even if this endpoint were reached some other way.
-        if ($visitorRequest->farm_id !== $kiosk->farm_id) {
+        if ($visitorRequest->facility_id !== $kiosk->facility_id) {
             return ['success' => false, 'message' => 'This visitor is approved for a different farm and cannot be authenticated at this kiosk.'];
         }
 

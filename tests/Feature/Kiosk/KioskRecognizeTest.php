@@ -3,7 +3,7 @@
 namespace Tests\Feature\Kiosk;
 
 use App\Models\FaceProfile;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -15,14 +15,16 @@ use App\Services\Kiosk\VisitorKioskService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class KioskRecognizeTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private KioskDevice $kiosk;
-    private FarmList $farm;
+    private FacilityList $facility;
     private IdentityType $identityType;
 
     protected function setUp(): void
@@ -36,17 +38,17 @@ class KioskRecognizeTest extends TestCase
             ->getMock());
 
         $this->identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
     }
 
-    private function otherFarm(): FarmList
+    private function otherFarm(): FacilityList
     {
-        return FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        return $this->createFacility('BETA');
     }
 
     private function descriptor(float $seed): array
@@ -80,7 +82,7 @@ class KioskRecognizeTest extends TestCase
         return VisitorRequest::create(array_merge([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),
@@ -201,7 +203,7 @@ class KioskRecognizeTest extends TestCase
     public function test_face_recognition_rejects_visitor_approved_for_a_different_farm(): void
     {
         $directory = $this->makeDirectoryWithFace(0.77);
-        $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
+        $this->makeVisitorRequest($directory, ['facility_id' => $this->otherFarm()->facility_id]);
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.77)]);
 
@@ -216,7 +218,7 @@ class KioskRecognizeTest extends TestCase
     public function test_qr_recognition_rejects_visitor_approved_for_a_different_farm(): void
     {
         $directory = $this->makeDirectoryWithFace(0.78);
-        $visitorRequest = $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
+        $visitorRequest = $this->makeVisitorRequest($directory, ['facility_id' => $this->otherFarm()->facility_id]);
 
         $response = $this->recognize(['qr_value' => $visitorRequest->visitor_id]);
 
@@ -227,8 +229,8 @@ class KioskRecognizeTest extends TestCase
     public function test_matching_farm_request_is_preferred_over_a_different_farm_request(): void
     {
         $directory = $this->makeDirectoryWithFace(0.79);
-        $this->makeVisitorRequest($directory, ['farm_id' => $this->otherFarm()->farm_id]);
-        $correctFarmRequest = $this->makeVisitorRequest($directory); // defaults to $this->farm (the kiosk's farm)
+        $this->makeVisitorRequest($directory, ['facility_id' => $this->otherFarm()->facility_id]);
+        $correctFarmRequest = $this->makeVisitorRequest($directory); // defaults to $this->facility (the kiosk's facility)
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.79)]);
 
@@ -248,7 +250,7 @@ class KioskRecognizeTest extends TestCase
 
         // A currently-active approved visit, but for a DIFFERENT farm.
         $activeWrongFarmRequest = $this->makeVisitorRequest($directory, [
-            'farm_id' => $otherFarm->farm_id,
+            'facility_id' => $otherFarm->facility_id,
         ]);
 
         // Face recognition must surface the SAME "wrong farm" result the QR

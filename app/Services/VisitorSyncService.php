@@ -13,17 +13,17 @@ use Illuminate\Support\Str;
 
 class VisitorSyncService
 {
-    public function __construct(private FarmResolver $farmResolver)
+    public function __construct(private FacilityResolver $facilityResolver)
     {
     }
 
     public function syncApprovedRequest(array $data): array
     {
-        $farm = $this->farmResolver->resolve($data['farm']);
-        if (!$farm) {
+        $facility = $this->facilityResolver->resolve($data['farm']);
+        if (!$facility) {
             return [
                 'success' => false,
-                'message' => 'Farm not found. Please add an alias in the admin panel.',
+                'message' => 'Facility not found. Please add an alias in the admin panel.',
             ];
         }
 
@@ -67,7 +67,7 @@ class VisitorSyncService
             'directory_id' => $directory->directory_id,
             'visitor_id' => $visitorIdKey,
             'qr_url' => $data['qr_url'] ?? null,
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'host_name' => $data['host_name'],
             'purpose' => $data['purpose'] ?? null,
             // Explicitly parsed (not left to the model cast) so AppSheet's

@@ -1,6 +1,6 @@
 <div class="content-header"><h2 class="content-title">Add Kiosk</h2></div>
 
-        <div class="table-wrapper" style="max-width: 600px;"><form method="POST" action="{{ route('kiosks.store') }}" class="ajax-form" style="padding: 1.5rem;">@csrf<div class="form-group"><label for="farm_id">Farm *</label><select id="farm_id" name="farm_id" required>@foreach($farms as $f)<option value="{{ $f->farm_id }}">{{ $f->farm_name }}</option>@endforeach</select>@error('farm_id')<div class="error-message">{{ $message }}</div>@enderror</div>
+        <div class="table-wrapper" style="max-width: 600px;"><form method="POST" action="{{ route('kiosks.store') }}" class="ajax-form" style="padding: 1.5rem;">@csrf<div class="form-group"><label for="facility_id">Facility *</label><select id="facility_id" name="facility_id" required>@foreach($facilities as $f)<option value="{{ $f->facility_id }}">{{ $f->facility_name }}</option>@endforeach</select>@error('facility_id')<div class="error-message">{{ $message }}</div>@enderror</div>
 
         <div class="form-group"><label for="device_name">Device Name *</label><input type="text" id="device_name" name="device_name" required></div>
 

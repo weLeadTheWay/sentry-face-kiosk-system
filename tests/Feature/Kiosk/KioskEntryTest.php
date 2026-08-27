@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Kiosk;
 
-use App\Models\FarmList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -13,11 +12,13 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class KioskEntryTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private KioskDevice $kiosk;
     private VisitorRequest $visitorRequest;
@@ -28,9 +29,9 @@ class KioskEntryTest extends TestCase
         parent::setUp();
 
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -48,7 +49,7 @@ class KioskEntryTest extends TestCase
         $this->visitorRequest = VisitorRequest::create([
             'directory_id' => $this->directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),
@@ -166,7 +167,7 @@ class KioskEntryTest extends TestCase
         $secondRequest = VisitorRequest::create([
             'directory_id' => $this->directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->visitorRequest->farm_id,
+            'facility_id' => $this->visitorRequest->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),
@@ -187,11 +188,11 @@ class KioskEntryTest extends TestCase
 
     public function test_entry_is_rejected_for_farm_mismatched_visitor_request(): void
     {
-        $otherFarm = FarmList::create(['farm_code' => 'BETA', 'farm_name' => 'BETA']);
+        $otherFacility = $this->createFacility('BETA');
         $mismatchedRequest = VisitorRequest::create([
             'directory_id' => $this->directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $otherFarm->farm_id,
+            'facility_id' => $otherFacility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),

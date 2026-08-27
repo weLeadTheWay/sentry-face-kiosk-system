@@ -2,17 +2,18 @@
 
 namespace Tests\Feature\Kiosk;
 
-use App\Models\FarmList;
 use App\Models\KioskDevice;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class KioskDeviceAdminTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private function actingAdmin(): User
     {
@@ -36,9 +37,9 @@ class KioskDeviceAdminTest extends TestCase
     public function test_regenerating_token_invalidates_the_old_one(): void
     {
         $this->actingAdmin();
-        $farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
+        $facility = $this->createFacility('ALPHA');
         $kiosk = KioskDevice::create([
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);

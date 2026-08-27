@@ -6,20 +6,20 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreKioskDeviceRequest;
 use App\Http\Requests\Admin\UpdateKioskDeviceRequest;
 use App\Models\KioskDevice;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 
 class KioskDeviceController extends Controller
 {
     public function index()
     {
-        $kiosks = KioskDevice::with('farm')->paginate(config('sentry.pagination'));
+        $kiosks = KioskDevice::with('facility')->paginate(config('sentry.pagination'));
         return $this->view('admin.kiosks._index', compact('kiosks'));
     }
 
     public function create()
     {
-        $farms = FarmList::all();
-        return $this->view('admin.kiosks._create', compact('farms'));
+        $facilities = FacilityList::all();
+        return $this->view('admin.kiosks._create', compact('facilities'));
     }
 
     public function store(StoreKioskDeviceRequest $request)
@@ -30,9 +30,9 @@ class KioskDeviceController extends Controller
 
     public function edit(KioskDevice $kiosk)
     {
-        $farms = FarmList::all();
+        $facilities = FacilityList::all();
         $kiosk_device = $kiosk;
-        return $this->view('admin.kiosks._edit', compact('kiosk_device', 'farms'));
+        return $this->view('admin.kiosks._edit', compact('kiosk_device', 'facilities'));
     }
 
     public function update(UpdateKioskDeviceRequest $request, KioskDevice $kiosk)

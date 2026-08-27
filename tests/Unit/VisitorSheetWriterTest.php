@@ -2,7 +2,6 @@
 
 namespace Tests\Unit;
 
-use App\Models\FarmList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -14,17 +13,19 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class VisitorSheetWriterTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private function makeEntryLog(string $loginId = 'XEGQNVH1', ?string $logoutId = 'GWDWS8FA'): VisitorEntryLog
     {
         $identityType = IdentityType::firstOrCreate(['identity_type_name' => 'Visitor']);
-        $farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
-        $kiosk = KioskDevice::create(['farm_id' => $farm->farm_id, 'device_name' => 'K1', 'serial_number' => 'SN-' . uniqid()]);
+        $facility = $this->createFacility('ALPHA');
+        $kiosk = KioskDevice::create(['facility_id' => $facility->facility_id, 'device_name' => 'K1', 'serial_number' => 'SN-' . uniqid()]);
         $email = 'juan+' . uniqid() . '@example.com';
         $directory = UserDirectory::create([
             'identity_type_id' => $identityType->identity_type_id,
@@ -35,7 +36,7 @@ class VisitorSheetWriterTest extends TestCase
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
             'visitor_id' => '08/06/2026-Louisa Reighn Alejo Santos-KLM012',
-            'farm_id' => $farm->farm_id,
+            'facility_id' => $facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),

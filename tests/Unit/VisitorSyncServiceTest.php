@@ -2,23 +2,25 @@
 
 namespace Tests\Unit;
 
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\UserDirectory;
 use App\Models\VisitorProfile;
 use App\Models\VisitorRequest;
 use App\Models\VisitorType;
-use App\Services\FarmResolver;
+use App\Services\FacilityResolver;
 use App\Services\VisitorSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class VisitorSyncServiceTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private VisitorSyncService $service;
-    private FarmList $farm;
+    private FacilityList $facility;
     private VisitorType $visitorType;
 
     protected function setUp(): void
@@ -27,9 +29,9 @@ class VisitorSyncServiceTest extends TestCase
 
         IdentityType::create(['identity_type_name' => 'Visitor']);
         $this->visitorType = VisitorType::create(['visitor_type_name' => 'Visitor']);
-        $this->farm = FarmList::create(['farm_code' => 'ALPHA', 'farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
 
-        $this->service = new VisitorSyncService(new FarmResolver());
+        $this->service = new VisitorSyncService(new FacilityResolver());
     }
 
     private function payload(array $overrides = []): array

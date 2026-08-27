@@ -14,7 +14,7 @@ class UpdateKioskDeviceRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'farm_id' => 'required|exists:farm_list,farm_id',
+            'facility_id' => 'required|exists:facility_list,facility_id',
             'device_name' => 'required|string|max:100',
             'device_type' => 'nullable|string|max:50',
             'serial_number' => 'required|string|max:100|unique:kiosk_device,serial_number,' . $this->route('kiosk')->kiosk_id . ',kiosk_id',

@@ -156,7 +156,7 @@
                 @else
                     <div class="success-icon">✓</div>
                     <div class="title">Registration Complete!</div>
-                    <div class="subtitle">You're ready to visit {{ $visitorRequest->farm->farm_name }}</div>
+                    <div class="subtitle">You're ready to visit {{ $visitorRequest->facility->facility_name }}</div>
                 @endif
 
                 <div class="qr-container">

@@ -17,7 +17,7 @@ class KioskDevice extends Model
     public $incrementing = true;
 
     protected $fillable = [
-        'farm_id',
+        'facility_id',
         'device_name',
         'device_type',
         'serial_number',
@@ -34,9 +34,9 @@ class KioskDevice extends Model
         ];
     }
 
-    public function farm(): BelongsTo
+    public function facility(): BelongsTo
     {
-        return $this->belongsTo(FarmList::class, 'farm_id', 'farm_id');
+        return $this->belongsTo(FacilityList::class, 'facility_id', 'facility_id');
     }
 
     protected static function booting()

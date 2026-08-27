@@ -3,7 +3,7 @@
 namespace Tests\Feature\Kiosk;
 
 use App\Models\FaceProfile;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -16,14 +16,16 @@ use App\Services\GoogleSheets\VisitorSheetWriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
+use Tests\Concerns\CreatesFacilities;
 use Tests\TestCase;
 
 class KioskGatesaleFlowTest extends TestCase
 {
     use RefreshDatabase;
+    use CreatesFacilities;
 
     private KioskDevice $kiosk;
-    private FarmList $farm;
+    private FacilityList $facility;
     private IdentityType $visitorIdentityType;
     private VisitorType $visitorType;
     private VisitorType $gatesaleType;
@@ -43,9 +45,9 @@ class KioskGatesaleFlowTest extends TestCase
         $this->visitorType = VisitorType::create(['visitor_type_name' => 'Visitor']);
         $this->gatesaleType = VisitorType::create(['visitor_type_name' => 'Gatesale']);
 
-        $this->farm = FarmList::firstOrCreate(['farm_code' => 'ALPHA'], ['farm_name' => 'ALPHA']);
+        $this->facility = $this->createFacility('ALPHA');
         $this->kiosk = KioskDevice::create([
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'device_name' => 'Test Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
@@ -88,7 +90,7 @@ class KioskGatesaleFlowTest extends TestCase
     {
         return VisitorRequest::create(array_merge([
             'directory_id' => $directory->directory_id,
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Existing Host',
             'origin' => 'Existing Origin',
             'purpose' => 'Existing Purpose',
@@ -262,9 +264,9 @@ class KioskGatesaleFlowTest extends TestCase
 
     public function test_active_request_at_a_different_farm_denies_entry_at_recognition(): void
     {
-        $otherFarm = FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        $otherFarm = $this->createFacility('BETA');
         $directory = $this->makeGatesaleDirectory(0.23);
-        $this->makeActiveGatesaleRequest($directory, ['farm_id' => $otherFarm->farm_id]);
+        $this->makeActiveGatesaleRequest($directory, ['facility_id' => $otherFarm->facility_id]);
 
         $response = $this->recognize(['descriptor' => $this->descriptor(0.23)]);
 
@@ -278,9 +280,9 @@ class KioskGatesaleFlowTest extends TestCase
         // Defense-in-depth: the backend must independently enforce this,
         // not only via the recognition-time short-circuit - simulates a
         // client that somehow reached create-visit with a stale directory_id.
-        $otherFarm = FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        $otherFarm = $this->createFacility('BETA');
         $directory = $this->makeGatesaleDirectory(0.235);
-        $this->makeActiveGatesaleRequest($directory, ['farm_id' => $otherFarm->farm_id]);
+        $this->makeActiveGatesaleRequest($directory, ['facility_id' => $otherFarm->facility_id]);
 
         $response = $this->createVisit([
             'directory_id' => $directory->directory_id,
@@ -293,14 +295,14 @@ class KioskGatesaleFlowTest extends TestCase
 
     public function test_may_visit_a_second_farm_after_the_first_farm_visit_is_no_longer_active(): void
     {
-        $otherFarm = FarmList::firstOrCreate(['farm_code' => 'BETA'], ['farm_name' => 'BETA']);
+        $otherFarm = $this->createFacility('BETA');
         $otherKiosk = KioskDevice::create([
-            'farm_id' => $otherFarm->farm_id,
+            'facility_id' => $otherFarm->facility_id,
             'device_name' => 'Beta Kiosk',
             'serial_number' => 'SN-' . uniqid(),
         ]);
         $directory = $this->makeGatesaleDirectory(0.236);
-        $firstFarmRequest = $this->makeActiveGatesaleRequest($directory, ['farm_id' => $otherFarm->farm_id]);
+        $firstFarmRequest = $this->makeActiveGatesaleRequest($directory, ['facility_id' => $otherFarm->facility_id]);
         VisitorSession::create([
             'visitor_request_id' => $firstFarmRequest->visitor_request_id,
             'session_status' => 'Inside',
@@ -614,7 +616,7 @@ class KioskGatesaleFlowTest extends TestCase
         $visitorRequest = VisitorRequest::create([
             'directory_id' => $directory->directory_id,
             'visitor_id' => 'VIS-' . uniqid(),
-            'farm_id' => $this->farm->farm_id,
+            'facility_id' => $this->facility->facility_id,
             'host_name' => 'Host',
             'visit_datetime' => now(),
             'registration_token' => 'REG_' . Str::upper(Str::random(8)),
