@@ -1,7 +1,7 @@
 <p><a href="{{ route('biosecurity-rules.index') }}" class="ajax-link">&larr; Biosecurity Rules</a></p>
 <div class="content-header"><h2 class="content-title">Add Downtime Stationary Rule</h2></div>
 
-        <div class="table-wrapper" style="max-width: 600px;"><form method="POST" action="{{ route('downtime-stationary.store') }}" class="ajax-form" style="padding: 1.5rem;">@csrf<div class="form-group @error('assigned_farm_id') has-error @enderror"><label for="assigned_farm_id">Assigned Farm *</label><select id="assigned_farm_id" name="assigned_farm_id" required>@foreach($farms as $f)<option value="{{ $f->farm_id }}">{{ $f->farm_name }}</option>@endforeach</select>@error('assigned_farm_id')<div class="error-message">{{ $message }}</div>@enderror</div>
+        <div class="table-wrapper" style="max-width: 600px;"><form method="POST" action="{{ route('downtime-stationary.store') }}" class="ajax-form" style="padding: 1.5rem;">@csrf<div class="form-group @error('assigned_facility_id') has-error @enderror"><label for="assigned_facility_id">Assigned Facility *</label><select id="assigned_facility_id" name="assigned_facility_id" required>@foreach($facilities as $f)<option value="{{ $f->facility_id }}">{{ $f->facility_name }}</option>@endforeach</select>@error('assigned_facility_id')<div class="error-message">{{ $message }}</div>@enderror</div>
 
         <div class="form-group @error('minimum_downtime') has-error @enderror"><label for="minimum_downtime">Minimum Downtime (hours)</label><input type="number" step="0.01" id="minimum_downtime" name="minimum_downtime">@error('minimum_downtime')<div class="error-message">{{ $message }}</div>@enderror</div>
 

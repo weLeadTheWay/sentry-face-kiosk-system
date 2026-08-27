@@ -6,20 +6,20 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreDowntimeStationaryRequest;
 use App\Http\Requests\Admin\UpdateDowntimeStationaryRequest;
 use App\Models\DowntimeStationary;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 
 class DowntimeStationaryController extends Controller
 {
     public function index()
     {
-        $downtime_stationary_rules = DowntimeStationary::with('assignedFarm')->paginate(config('sentry.pagination'));
+        $downtime_stationary_rules = DowntimeStationary::with('assignedFacility')->paginate(config('sentry.pagination'));
         return $this->view('admin.downtime-stationary._index', compact('downtime_stationary_rules'));
     }
 
     public function create()
     {
-        $farms = FarmList::all();
-        return $this->view('admin.downtime-stationary._create', compact('farms'));
+        $facilities = FacilityList::all();
+        return $this->view('admin.downtime-stationary._create', compact('facilities'));
     }
 
     public function store(StoreDowntimeStationaryRequest $request)
@@ -30,8 +30,8 @@ class DowntimeStationaryController extends Controller
 
     public function edit(DowntimeStationary $downtime_stationary)
     {
-        $farms = FarmList::all();
-        return $this->view('admin.downtime-stationary._edit', compact('downtime_stationary', 'farms'));
+        $facilities = FacilityList::all();
+        return $this->view('admin.downtime-stationary._edit', compact('downtime_stationary', 'facilities'));
     }
 
     public function update(UpdateDowntimeStationaryRequest $request, DowntimeStationary $downtime_stationary)

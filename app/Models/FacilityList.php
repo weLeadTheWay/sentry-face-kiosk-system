@@ -48,4 +48,24 @@ class FacilityList extends Model
     {
         return $this->hasMany(FacilityAlias::class, 'facility_id', 'facility_id');
     }
+
+    public function kioskDevices(): HasMany
+    {
+        return $this->hasMany(KioskDevice::class, 'facility_id', 'facility_id');
+    }
+
+    public function originDowntimeMatrixRules(): HasMany
+    {
+        return $this->hasMany(DowntimeMatrix::class, 'origin_facility_id', 'facility_id');
+    }
+
+    public function destinationDowntimeMatrixRules(): HasMany
+    {
+        return $this->hasMany(DowntimeMatrix::class, 'destination_facility_id', 'facility_id');
+    }
+
+    public function downtimeStationaryRules(): HasMany
+    {
+        return $this->hasMany(DowntimeStationary::class, 'assigned_facility_id', 'facility_id');
+    }
 }

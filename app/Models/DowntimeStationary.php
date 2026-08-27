@@ -16,7 +16,7 @@ class DowntimeStationary extends Model
     public $incrementing = true;
 
     protected $fillable = [
-        'assigned_farm_id',
+        'assigned_facility_id',
         'minimum_downtime',
         'maximum_downtime',
         'is_active',
@@ -31,8 +31,8 @@ class DowntimeStationary extends Model
         ];
     }
 
-    public function assignedFarm(): BelongsTo
+    public function assignedFacility(): BelongsTo
     {
-        return $this->belongsTo(FarmList::class, 'assigned_farm_id', 'farm_id');
+        return $this->belongsTo(FacilityList::class, 'assigned_facility_id', 'facility_id');
     }
 }

@@ -8,14 +8,14 @@
         @csrf
         @method('PUT')
 
-        <div class="form-group @error('assigned_farm_id') has-error @enderror">
-            <label for="assigned_farm_id">Assigned Farm *</label>
-            <select id="assigned_farm_id" name="assigned_farm_id" required>
-                @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $downtime_stationary->assigned_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+        <div class="form-group @error('assigned_facility_id') has-error @enderror">
+            <label for="assigned_facility_id">Assigned Facility *</label>
+            <select id="assigned_facility_id" name="assigned_facility_id" required>
+                @foreach($facilities as $f)
+                    <option value="{{ $f->facility_id }}" {{ $f->facility_id == $downtime_stationary->assigned_facility_id ? 'selected' : '' }}>{{ $f->facility_name }}</option>
                 @endforeach
             </select>
-            @error('assigned_farm_id')
+            @error('assigned_facility_id')
                 <div class="error-message">{{ $message }}</div>
             @enderror
         </div>

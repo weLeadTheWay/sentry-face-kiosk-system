@@ -15,14 +15,14 @@ class UpdateDowntimeMatrixRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'origin_farm_id' => [
+            'origin_facility_id' => [
                 'required',
-                'exists:farm_list,farm_id',
+                'exists:facility_list,facility_id',
                 Rule::unique('downtime_matrix')
-                    ->where(fn ($query) => $query->where('destination_farm_id', $this->input('destination_farm_id')))
+                    ->where(fn ($query) => $query->where('destination_facility_id', $this->input('destination_facility_id')))
                     ->ignore($this->route('downtime_matrix')),
             ],
-            'destination_farm_id' => 'required|exists:farm_list,farm_id',
+            'destination_facility_id' => 'required|exists:facility_list,facility_id',
             'minimum_downtime' => 'nullable|numeric|min:0|max:9999.99',
             'maximum_downtime' => 'nullable|numeric|min:0|max:9999.99',
             'is_active' => 'boolean',
@@ -32,7 +32,7 @@ class UpdateDowntimeMatrixRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'origin_farm_id.unique' => 'A downtime rule for this origin/destination farm pair already exists.',
+            'origin_facility_id.unique' => 'A downtime rule for this origin/destination facility pair already exists.',
         ];
     }
 }

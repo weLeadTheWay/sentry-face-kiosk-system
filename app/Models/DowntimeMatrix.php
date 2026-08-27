@@ -16,8 +16,8 @@ class DowntimeMatrix extends Model
     public $incrementing = true;
 
     protected $fillable = [
-        'origin_farm_id',
-        'destination_farm_id',
+        'origin_facility_id',
+        'destination_facility_id',
         'minimum_downtime',
         'maximum_downtime',
         'is_active',
@@ -32,13 +32,13 @@ class DowntimeMatrix extends Model
         ];
     }
 
-    public function originFarm(): BelongsTo
+    public function originFacility(): BelongsTo
     {
-        return $this->belongsTo(FarmList::class, 'origin_farm_id', 'farm_id');
+        return $this->belongsTo(FacilityList::class, 'origin_facility_id', 'facility_id');
     }
 
-    public function destinationFarm(): BelongsTo
+    public function destinationFacility(): BelongsTo
     {
-        return $this->belongsTo(FarmList::class, 'destination_farm_id', 'farm_id');
+        return $this->belongsTo(FacilityList::class, 'destination_facility_id', 'facility_id');
     }
 }

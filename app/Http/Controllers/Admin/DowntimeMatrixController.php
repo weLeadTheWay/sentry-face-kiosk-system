@@ -6,20 +6,20 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreDowntimeMatrixRequest;
 use App\Http\Requests\Admin\UpdateDowntimeMatrixRequest;
 use App\Models\DowntimeMatrix;
-use App\Models\FarmList;
+use App\Models\FacilityList;
 
 class DowntimeMatrixController extends Controller
 {
     public function index()
     {
-        $downtime_matrix_rules = DowntimeMatrix::with('originFarm', 'destinationFarm')->paginate(config('sentry.pagination'));
+        $downtime_matrix_rules = DowntimeMatrix::with('originFacility', 'destinationFacility')->paginate(config('sentry.pagination'));
         return $this->view('admin.downtime-matrix._index', compact('downtime_matrix_rules'));
     }
 
     public function create()
     {
-        $farms = FarmList::all();
-        return $this->view('admin.downtime-matrix._create', compact('farms'));
+        $facilities = FacilityList::all();
+        return $this->view('admin.downtime-matrix._create', compact('facilities'));
     }
 
     public function store(StoreDowntimeMatrixRequest $request)
@@ -30,8 +30,8 @@ class DowntimeMatrixController extends Controller
 
     public function edit(DowntimeMatrix $downtime_matrix)
     {
-        $farms = FarmList::all();
-        return $this->view('admin.downtime-matrix._edit', compact('downtime_matrix', 'farms'));
+        $facilities = FacilityList::all();
+        return $this->view('admin.downtime-matrix._edit', compact('downtime_matrix', 'facilities'));
     }
 
     public function update(UpdateDowntimeMatrixRequest $request, DowntimeMatrix $downtime_matrix)

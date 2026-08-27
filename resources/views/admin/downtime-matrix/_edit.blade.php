@@ -8,26 +8,26 @@
         @csrf
         @method('PUT')
 
-        <div class="form-group @error('origin_farm_id') has-error @enderror">
-            <label for="origin_farm_id">Origin Farm *</label>
-            <select id="origin_farm_id" name="origin_farm_id" required>
-                @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $downtime_matrix->origin_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+        <div class="form-group @error('origin_facility_id') has-error @enderror">
+            <label for="origin_facility_id">Origin Facility *</label>
+            <select id="origin_facility_id" name="origin_facility_id" required>
+                @foreach($facilities as $f)
+                    <option value="{{ $f->facility_id }}" {{ $f->facility_id == $downtime_matrix->origin_facility_id ? 'selected' : '' }}>{{ $f->facility_name }}</option>
                 @endforeach
             </select>
-            @error('origin_farm_id')
+            @error('origin_facility_id')
                 <div class="error-message">{{ $message }}</div>
             @enderror
         </div>
 
-        <div class="form-group @error('destination_farm_id') has-error @enderror">
-            <label for="destination_farm_id">Destination Farm *</label>
-            <select id="destination_farm_id" name="destination_farm_id" required>
-                @foreach($farms as $f)
-                    <option value="{{ $f->farm_id }}" {{ $f->farm_id == $downtime_matrix->destination_farm_id ? 'selected' : '' }}>{{ $f->farm_name }}</option>
+        <div class="form-group @error('destination_facility_id') has-error @enderror">
+            <label for="destination_facility_id">Destination Facility *</label>
+            <select id="destination_facility_id" name="destination_facility_id" required>
+                @foreach($facilities as $f)
+                    <option value="{{ $f->facility_id }}" {{ $f->facility_id == $downtime_matrix->destination_facility_id ? 'selected' : '' }}>{{ $f->facility_name }}</option>
                 @endforeach
             </select>
-            @error('destination_farm_id')
+            @error('destination_facility_id')
                 <div class="error-message">{{ $message }}</div>
             @enderror
         </div>

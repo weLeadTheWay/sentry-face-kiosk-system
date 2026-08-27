@@ -15,10 +15,10 @@ class UpdateDowntimeStationaryRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'assigned_farm_id' => [
+            'assigned_facility_id' => [
                 'required',
-                'exists:farm_list,farm_id',
-                Rule::unique('downtime_stationary', 'assigned_farm_id')->ignore($this->route('downtime_stationary')),
+                'exists:facility_list,facility_id',
+                Rule::unique('downtime_stationary', 'assigned_facility_id')->ignore($this->route('downtime_stationary')),
             ],
             'minimum_downtime' => 'nullable|numeric|min:0|max:9999.99',
             'maximum_downtime' => 'nullable|numeric|min:0|max:9999.99',
@@ -29,7 +29,7 @@ class UpdateDowntimeStationaryRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'assigned_farm_id.unique' => 'This farm already has a downtime stationary rule assigned.',
+            'assigned_facility_id.unique' => 'This facility already has a downtime stationary rule assigned.',
         ];
     }
 }
