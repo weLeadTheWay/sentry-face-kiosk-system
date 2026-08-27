@@ -53,4 +53,6 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/users', \App\Http\Controllers\Admin\UserController::class)->middleware('permission:users.manage');
     Route::resource('admin/audit-logs', \App\Http\Controllers\Admin\AuditLogController::class)->middleware('permission:audit_logs.view')->only('index');
     Route::resource('admin/farm-aliases', \App\Http\Controllers\Admin\FarmAliasController::class)->middleware('permission:farms.manage')->parameter('farm_alias', 'farm_alias');
+    Route::resource('admin/facilities', \App\Http\Controllers\Admin\FacilityController::class)->middleware('permission:facilities.manage');
+    Route::resource('admin/facility-aliases', \App\Http\Controllers\Admin\FacilityAliasController::class)->middleware('permission:facilities.manage')->parameter('facility_alias', 'facility_alias');
 });

@@ -236,6 +236,10 @@
             <div class="sidebar-header">{{ config('app.name') }}</div>
             <ul class="sidebar-menu">
                 <li><a href="{{ route('dashboard') }}" class="ajax-link">Dashboard</a></li>
+                @if(auth()->user()->hasPermission('facilities.manage'))
+                    <li><a href="{{ route('facilities.index') }}" class="ajax-link">Facilities</a></li>
+                    <li><a href="{{ route('facility-aliases.index') }}" class="ajax-link">Facility Aliases</a></li>
+                @endif
                 @if(auth()->user()->hasPermission('farms.manage'))
                     <li><a href="{{ route('farms.index') }}" class="ajax-link">Farms</a></li>
                     <li><a href="{{ route('farm-aliases.index') }}" class="ajax-link">Farm Aliases</a></li>
