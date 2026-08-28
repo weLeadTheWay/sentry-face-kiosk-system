@@ -138,6 +138,12 @@ class DowntimeMatrixImportService
      * there is still a single "who produced this import, and when" record
      * - just not a per-production-rule one.
      *
+     * Only one import can be PRODUCED at a time - producing this one
+     * reverts any other import currently sitting at PRODUCED back to
+     * VERIFIED (its state immediately before being produced), since its
+     * rules are no longer what's actually active in downtime_matrix/
+     * downtime_stationary once this one's deactivate-then-upsert has run.
+     *
      * @return array{
      *     success: bool,
      *     error?: string,
@@ -145,6 +151,7 @@ class DowntimeMatrixImportService
      *     production_records_created?: int,
      *     mapped?: array{VALID: int, WARNING: int},
      *     skipped?: array{UNMATCHED: int, AMBIGUOUS: int, INVALID: int},
+     *     reverted_imports?: string[],
      * }
      */
     public function produce(DowntimeMatrixImport $import, User $producer): array
@@ -207,6 +214,34 @@ class DowntimeMatrixImportService
                     );
                 }
 
+                // Only one import can ever be the "currently live" production
+                // source - PRODUCED means exactly that, not just "was
+                // produced at some point." Any other import still sitting at
+                // PRODUCED is, by definition, no longer what's actually
+                // active in downtime_matrix/downtime_stationary (this
+                // import's own deactivate-then-upsert above just superseded
+                // it) - it reverts to VERIFIED, its state immediately before
+                // being produced, with produced_by/produced_at cleared. Its
+                // own verified_by/verified_at are untouched. Expected to be
+                // 0 or 1 rows in normal use (this rule didn't exist before
+                // 2026-08-28, so an older environment could technically have
+                // more than one already sitting at PRODUCED - this loop
+                // reverts all of them, not just the first found), so a plain
+                // per-row Eloquent update() (audit-logged, like any other
+                // downtime_matrix_imports status change) is fine here - this
+                // is not the bulk-write hot path that needed upsert().
+                $revertedImports = DowntimeMatrixImport::where('status', 'PRODUCED')
+                    ->where('import_id', '!=', $import->import_id)
+                    ->get();
+
+                foreach ($revertedImports as $priorImport) {
+                    $priorImport->update([
+                        'status' => 'VERIFIED',
+                        'produced_by' => null,
+                        'produced_at' => null,
+                    ]);
+                }
+
                 $import->update([
                     'status' => 'PRODUCED',
                     'produced_by' => $producer->user_id,
@@ -223,6 +258,7 @@ class DowntimeMatrixImportService
                         'AMBIGUOUS' => $import->ambiguous_rows_count,
                         'INVALID' => $import->invalid_rows_count,
                     ],
+                    'reverted_imports' => $revertedImports->pluck('original_filename')->all(),
                 ];
             });
         } catch (\Throwable $e) {

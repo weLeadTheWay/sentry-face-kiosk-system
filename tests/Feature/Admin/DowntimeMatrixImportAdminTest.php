@@ -946,6 +946,71 @@ class DowntimeMatrixImportAdminTest extends TestCase
         $this->assertSame(1, DowntimeMatrix::count(), 'No new production rows may survive a rolled-back transaction.');
     }
 
+    public function test_producing_a_new_import_reverts_a_previously_produced_import_to_verified(): void
+    {
+        $this->seedRealFacilityData();
+
+        // Distinct filenames so the assertion that the Preview response
+        // names the reverted import specifically (not just showing its own
+        // filename, which every Preview page already does) is meaningful.
+        $this->post(route('downtime-matrix-import.store'), [
+            'matrix_type' => 'BFI_BVA',
+            'pdf_file' => $this->fixturePdf('june-20.pdf'),
+        ])->assertOk();
+        $first = DowntimeMatrixImport::first();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $first))->assertOk();
+        $first->refresh();
+        $firstVerifiedBy = $first->verified_by;
+        $firstVerifiedAt = $first->verified_at;
+        $this->ajaxPost(route('downtime-matrix-import.produce', $first))->assertOk();
+        $first->refresh();
+        $this->assertSame('PRODUCED', $first->status, 'sanity check: the first import must actually be PRODUCED before the second one is');
+
+        $this->post(route('downtime-matrix-import.store'), [
+            'matrix_type' => 'BFI_BVA',
+            'pdf_file' => $this->fixturePdf('aug-12.pdf'),
+        ])->assertOk();
+        $second = DowntimeMatrixImport::where('import_id', '!=', $first->import_id)->sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $second))->assertOk();
+        $producer = auth()->user();
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $second));
+
+        $response->assertOk();
+        // Only one import may be PRODUCED at a time - the first one reverts
+        // to VERIFIED (its state immediately before being produced) the
+        // moment a second import takes over as the live production source.
+        $first->refresh();
+        $this->assertSame('VERIFIED', $first->status, 'A superseded PRODUCED import must revert to VERIFIED.');
+        $this->assertNull($first->produced_by);
+        $this->assertNull($first->produced_at);
+        // Its prior Verify history is untouched - "back to its last state"
+        // means VERIFIED with the same verified_by/verified_at, not a fresh
+        // one.
+        $this->assertSame($firstVerifiedBy, $first->verified_by);
+        $this->assertEquals($firstVerifiedAt, $first->verified_at);
+
+        $second->refresh();
+        $this->assertSame('PRODUCED', $second->status);
+        $this->assertSame($producer->user_id, $second->produced_by);
+        $this->assertNotNull($second->produced_at);
+
+        $response->assertSee($first->original_filename);
+        $response->assertSee('reverted to Verified');
+    }
+
+    public function test_producing_the_only_produced_import_reports_no_reverted_imports(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $import));
+
+        $response->assertOk();
+        $response->assertDontSee('reverted to Verified');
+    }
+
     // --- Preview page Data Table (rows-data) --------------------------------
 
     public function test_show_page_shell_has_all_three_tabs_but_leaks_no_row_data(): void

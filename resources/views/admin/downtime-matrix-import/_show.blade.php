@@ -598,6 +598,14 @@
                     <tr><td>&nbsp;&nbsp;INVALID</td><td>{{ $productionResult['skipped']['INVALID'] }}</td></tr>
                 </tbody>
             </table>
+            @if(!empty($productionResult['reverted_imports']))
+                {{-- Only one import can be PRODUCED at a time - this one just
+                     took over as the live production source, so whichever
+                     import(s) held that status before have been reverted
+                     back to VERIFIED (their state immediately before being
+                     produced). --}}
+                <p style="color: #666; font-size: 13px; margin-top: 1rem; margin-bottom: 0;">Note: the following previously-produced import(s) reverted to Verified, since this import is now the active production source: {{ implode(', ', $productionResult['reverted_imports']) }}.</p>
+            @endif
         @else
             <p style="margin-top: 0;"><strong>Production mapping failed.</strong></p>
             <p style="color: #666; font-size: 13px;">{{ $productionResult['error'] }} No changes were made - the previous production configuration remains active, and this import is still VERIFIED.</p>
