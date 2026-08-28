@@ -43,9 +43,18 @@ Route::middleware('auth')->group(function () {
     Route::post('admin/kiosks/{kiosk}/regenerate-token', [\App\Http\Controllers\Admin\KioskDeviceController::class, 'regenerateToken'])->name('kiosks.regenerate-token')->middleware('permission:kiosks.manage');
     Route::resource('admin/identity-types', \App\Http\Controllers\Admin\IdentityTypeController::class)->middleware('permission:identity_types.manage')->parameter('identity_type', 'identity_type');
     Route::resource('admin/employee-types', \App\Http\Controllers\Admin\EmployeeTypeController::class)->middleware('permission:employee_types.manage')->parameter('employee_type', 'employee_type');
-    Route::get('admin/biosecurity-rules', [\App\Http\Controllers\Admin\BiosecurityRuleController::class, 'index'])->name('biosecurity-rules.index')->middleware('permission:biosecurity.manage');
+    Route::get('admin/biosecurity-rules', [\App\Http\Controllers\Admin\BiosecurityRuleController::class, 'index'])->name('biosecurity-rules.index')->middleware('permission:biosecurity.manage,downtime_matrix_import.manage');
     Route::resource('admin/biosecurity-rules/downtime-matrix', \App\Http\Controllers\Admin\DowntimeMatrixController::class)->middleware('permission:biosecurity.manage')->parameter('downtime_matrix', 'downtime_matrix');
     Route::resource('admin/biosecurity-rules/downtime-stationary', \App\Http\Controllers\Admin\DowntimeStationaryController::class)->middleware('permission:biosecurity.manage')->parameter('downtime_stationary', 'downtime_stationary');
+
+    Route::middleware('permission:downtime_matrix_import.manage')->group(function () {
+        Route::get('admin/biosecurity-rules/downtime-matrix-import', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'index'])->name('downtime-matrix-import.index');
+        Route::get('admin/biosecurity-rules/downtime-matrix-import/create', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'create'])->name('downtime-matrix-import.create');
+        Route::post('admin/biosecurity-rules/downtime-matrix-import', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'store'])->name('downtime-matrix-import.store');
+        Route::get('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'show'])->name('downtime-matrix-import.show');
+        Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/verify', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'verify'])->name('downtime-matrix-import.verify');
+        Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/cancel', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'cancel'])->name('downtime-matrix-import.cancel');
+    });
     Route::resource('admin/roles', \App\Http\Controllers\Admin\RoleController::class)->middleware('permission:roles.manage');
     Route::get('admin/roles/{role}/permissions', [\App\Http\Controllers\Admin\RoleController::class, 'permissions'])->name('roles.permissions')->middleware('permission:roles.manage');
     Route::post('admin/roles/{role}/permissions', [\App\Http\Controllers\Admin\RoleController::class, 'updatePermissions'])->name('roles.updatePermissions')->middleware('permission:roles.manage');

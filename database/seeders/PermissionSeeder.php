@@ -17,6 +17,7 @@ class PermissionSeeder extends Seeder
             ['permission_key' => 'facilities.manage', 'permission_name' => 'Manage Facilities', 'description' => 'Create, edit, delete facilities and facility aliases'],
             ['permission_key' => 'kiosks.manage', 'permission_name' => 'Manage Kiosks', 'description' => 'Create, edit, delete kiosk devices'],
             ['permission_key' => 'biosecurity.manage', 'permission_name' => 'Manage Biosecurity Rules', 'description' => 'Create, edit, delete biosecurity rules'],
+            ['permission_key' => 'downtime_matrix_import.manage', 'permission_name' => 'Manage Downtime Matrix Imports', 'description' => 'Upload, preview, verify, and cancel downtime matrix PDF imports'],
             ['permission_key' => 'identity_types.manage', 'permission_name' => 'Manage Identity Types', 'description' => 'Create, edit, delete identity types'],
             ['permission_key' => 'employee_types.manage', 'permission_name' => 'Manage Employee Types', 'description' => 'Create, edit, delete employee types'],
             ['permission_key' => 'audit_logs.view', 'permission_name' => 'View Audit Logs', 'description' => 'Access audit log records'],

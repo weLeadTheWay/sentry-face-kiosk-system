@@ -3,7 +3,7 @@
 > **MANDATORY — READ BEFORE ANY WORK IN THIS REPO.**
 > Before answering any question, explaining behavior, or implementing any change (new feature, bug fix, endpoint, business-rule change, refactor, migration) in this repository, you MUST read this file in full first. Use it to identify which module(s) the request touches, then read that module's section and its listed critical files before writing or explaining anything. Do not rely on memory of a previous session's reading of this file — re-read it at the start of every new conversation/session. If the request is trivial (e.g. answering from a single obviously-unrelated file), still confirm against this file's module map that it's actually unrelated before skipping deeper reading.
 
-This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26; the "Facility Master Data" module and its tables were added 2026-08-27 in two same-day phases — Phase 1 built the tables as dormant/parallel data, Phase 2 cut `visitor_request`/`kiosk_device`/Visitor Sync over to depend on them for real — see that module's section for exactly what is and isn't wired in). Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
+This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26; the "Facility Master Data" module and its tables were added 2026-08-27 in two same-day phases — Phase 1 built the tables as dormant/parallel data, Phase 2 cut `visitor_request`/`kiosk_device`/Visitor Sync over to depend on them for real — see that module's section for exactly what is and isn't wired in; the "Downtime Matrix PDF Import" module — Phase 1 of a multi-phase feature, parse/validate/preview only, no production-table writes — was added 2026-08-27 as well). Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
 
 **Rule for future sessions:** if you discover that code no longer matches this document, trust the code and update this document — do not silently follow stale documentation.
 
@@ -666,7 +666,7 @@ ACTIVE + Outside with a real OUT log        → COMPLETED_AUTO  (Sheets write, u
 
 **Responsibilities:** Standard create/read/update/delete for: Facilities (`FacilityList`), Facility Aliases, Kiosk Devices (+ token regeneration), Identity Types, Employee Types, Biosecurity Rules (main module) with its two submodules Downtime Matrix and Downtime Stationary, Roles (+ permission assignment), Users, and a read-only Audit Log viewer. **The legacy Farms/Farm Aliases CRUD (`FarmController`/`FarmAliasController`) was decommissioned on 2026-08-27 (Phase 5)** once nothing in the runtime depended on it anymore — see the "Facility Master Data" module.
 
-**Entry Points:** All under `routes/web.php`, behind the `auth` middleware and a per-resource `permission:<key>` middleware — see the permission table below. All are Laravel resource routes (`Route::resource`) except `roles/{role}/permissions` (GET/POST), `kiosks/{kiosk}/regenerate-token` (POST), and `admin/biosecurity-rules` itself (a plain `GET`-only landing route — see the Biosecurity Rules submodule note below).
+**Entry Points:** All under `routes/web.php`, behind the `auth` middleware and a per-resource `permission:<key>` middleware — see the permission table below. All are Laravel resource routes (`Route::resource`) except `roles/{role}/permissions` (GET/POST), `kiosks/{kiosk}/regenerate-token` (POST), and `admin/biosecurity-rules` itself (a plain `GET`-only landing route — see the Biosecurity Rules submodule note below). As of 2026-08-27, the landing route's middleware is `permission:biosecurity.manage,downtime_matrix_import.manage` (the `CheckPermission` middleware treats a comma-separated list as OR) so a user granted only the newer `downtime_matrix_import.manage` key can still reach the landing page — see the separate "Downtime Matrix PDF Import" module.
 
 **Biosecurity Rules is one module with two submodules, loaded one at a time (not two nested resources shown together):**
 ```text
@@ -685,6 +685,8 @@ that submodule's own index/create/edit partials replace #content — the other
    submodule's table is never fetched or rendered until its own card/link is clicked
 ```
 Each submodule's `_index`/`_create`/`_edit` partial carries a "← Biosecurity Rules" link back to the landing page. Both submodule route groups are nested under the `admin/biosecurity-rules/` URI prefix but keep short route names (`downtime-matrix.*`, `downtime-stationary.*`) because Laravel's resource registrar names nested-slash resources from their last URI segment, not the full path.
+
+As of 2026-08-27, the landing page has a **third** card — "Downtime Matrix Import" (`downtime-matrix-import.index`) — gated separately by `downtime_matrix_import.manage` rather than sharing `biosecurity.manage`, and following an entirely different architecture (a service-layer parse pipeline, not the direct-Eloquent CRUD pattern the two cards above use). It's documented as its own top-level module — see "Downtime Matrix PDF Import" — not as a third CRUD submodule here, since it doesn't follow this section's `Store*Request`/`Update*Request`/direct-Eloquent pattern at all.
 
 **Main Flow (identical pattern across every controller in this module):**
 ```text
@@ -722,7 +724,7 @@ Blade partial response — every controller has a private view() helper that ret
 
 **Dependencies:** `RolePermissionService` (role↔permission sync), `AuthService` (user create/update with password hashing), `AuditLogService` (filtered/paginated log queries).
 
-**Related Modules:** Facilities/Facility Aliases feed `Visitor Sync` (`FacilityResolver`, renamed from `FarmResolver`), which resolves exclusively against `facility_list`/`facility_aliases` — see the "Facility Master Data" module. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth via `kiosk_device.facility_id` → `facility_list` — its create/edit dropdown lists `FacilityList::all()`. Roles/Permissions/Users feed `Authentication & Authorization`. Downtime Matrix/Downtime Stationary also point at `facility_list` (`origin_facility_id`/`destination_facility_id`/`assigned_facility_id`, dropdowns sourced from `FacilityList::all()`) — and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: these are modeled and administrable but **no other module currently reads them** (no code path queries `DowntimeMatrix`/`DowntimeStationary` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response). **The legacy Farms/Farm Aliases admin CRUD was removed entirely on 2026-08-27 (Phase 5)** — `farm_list`/`farm_aliases` now have zero remaining live FKs from any table AND no admin UI; they are pure legacy data kept only as a rollback safety layer.
+**Related Modules:** Facilities/Facility Aliases feed `Visitor Sync` (`FacilityResolver`, renamed from `FarmResolver`), which resolves exclusively against `facility_list`/`facility_aliases` — see the "Facility Master Data" module. Kiosk Devices feed `Kiosk Entry`/`Kiosk Self-Service`'s device auth via `kiosk_device.facility_id` → `facility_list` — its create/edit dropdown lists `FacilityList::all()`. Roles/Permissions/Users feed `Authentication & Authorization`. Downtime Matrix/Downtime Stationary also point at `facility_list` (`origin_facility_id`/`destination_facility_id`/`assigned_facility_id`, dropdowns sourced from `FacilityList::all()`) — and Identity/Employee Types are reference data — `NEEDS VERIFICATION`: these are modeled and administrable but **no other module currently reads them** (no code path queries `DowntimeMatrix`/`DowntimeStationary` or joins on `employee_type_id` for any decision logic) — they appear to be forward-looking/scaffolded for the not-yet-implemented Employee tracking flow (`routeByIdentity()`'s `Employee` branch is a hard-coded placeholder response). **The legacy Farms/Farm Aliases admin CRUD was removed entirely on 2026-08-27 (Phase 5)** — `farm_list`/`farm_aliases` now have zero remaining live FKs from any table AND no admin UI; they are pure legacy data kept only as a rollback safety layer. **`Downtime Matrix PDF Import`** (added 2026-08-27, its own module section) is a staging front-end for this module's Downtime Matrix/Downtime Stationary submodules — it never writes to `downtime_matrix`/`downtime_stationary` itself; a future phase would need to promote its staged rows through (or into) these same submodules' data.
 
 **Business Rules:**
 - Every `Store*Request`/`Update*Request`'s `authorize()` independently re-checks the same permission the route middleware already checked — belt-and-suspenders, not a bypass path.
@@ -744,6 +746,112 @@ Blade partial response — every controller has a private view() helper that ret
 **Known Constraints:** No bulk operations (import/export) on any admin resource. No soft-deletes anywhere — `destroy()` is a hard delete (cascades per each migration's FK constraints — e.g. deleting a `user_directory` row cascades to `visitor_request` and `visitor_profile`; deleting a `FacilityList` row cascades to `facility_aliases`, `kiosk_device`, `downtime_matrix` (both `origin_facility_id`/`destination_facility_id`), and `downtime_stationary`, and is blocked (`RESTRICT`) by any `visitor_request` still pointing at it — this is now the operative version of the pre-cutover `FarmList`/`visitor_request`/`downtime_matrix`/`downtime_stationary` behavior). **As of the 2026-08-27 cutovers, deleting a `FarmList` row no longer cascades to (or is blocked by) anything** — `farm_aliases` is the only remaining FK into `farm_list`; `kiosk_device`, `visitor_request`, `downtime_matrix`, and `downtime_stationary` were all moved to `facility_list` across Phases 2 and 4 and have no relationship to `farm_list` at all anymore. `facility_type`/`facility_category` (the lookup tables `facility_list` depends on) still have no admin CRUD of their own — only `FacilityList`/`FacilityAlias` got one in Phase 3 — so a genuinely new facility type or category still needs a seeder change or direct DB access.
 
 **Important Notes for Future Changes:** Do not add a new admin resource without both a `permission:<key>` route guard **and** a matching `authorize()` check in its FormRequests — the existing pattern relies on both being present. If you add a `VisitorType` admin controller (a real gap — see the Self-Service module's Known Constraints), follow this exact same pattern for consistency. If a third Biosecurity Rules submodule is ever added, follow the same landing-card + nested-resource-route pattern used for Downtime Matrix/Downtime Stationary rather than adding a third card of unrelated shape. `FacilityController`/`FacilityAliasController` (added 2026-08-27, Phase 3) are now the canonical example of this module's controller+request+view pattern — use them as the template for any future `FacilityType`/`FacilityCategory` admin screens (the original template, the Farms/Farm Aliases CRUD, was removed in Phase 5).
+
+---
+
+### Module: `Downtime Matrix PDF Import` (Phase 1 — Parse, Validate, Preview; added 2026-08-27)
+
+**Purpose:** Let an admin upload a BFI/BVA-format Downtime Matrix PDF (the same kind of document `Admin Management`'s Downtime Matrix/Downtime Stationary screens require to be re-keyed by hand today) and have it parsed, facility-resolved, normalized, classified, and validated into a human-reviewable staging preview. **Phase 1 never writes to the production `downtime_matrix`/`downtime_stationary` tables** — promoting verified rows into those tables is explicitly out of scope, left for a later phase.
+
+**Responsibilities:** PDF upload/storage; text-and-position extraction from the PDF's content stream(s) (including any Form XObject the table happens to be rendered inside); reconstructing the visual grid from those positioned fragments; resolving each origin/destination label against `facility_list`/`facility_aliases` (including a dynamic facility-*group* concept, e.g. "LEP, DC" → all active `DC_WAREHOUSE` facilities); normalizing raw hour values into `minimum_downtime`/`maximum_downtime`; classifying each rule `FARM_TO_FARM` vs `STATIONARY`; assigning a final `resolution_status` per a fixed precedence; staging the result; and a Verify/Cancel status-only workflow.
+
+**Entry Points:** All under `admin/biosecurity-rules/downtime-matrix-import`, behind `auth` + `permission:downtime_matrix_import.manage` (`routes/web.php`):
+- `GET /admin/biosecurity-rules/downtime-matrix-import` — import history list.
+- `GET .../create` — upload form (Matrix Type selector: `BFI_BVA` functional, `HOGS` disabled/"Coming Soon").
+- `POST /admin/biosecurity-rules/downtime-matrix-import` — upload + synchronous parse, renders the Preview directly (no redirect).
+- `GET .../{downtime_matrix_import}` — Preview (staged rows, grouped Farm-to-Farm/Stationary, Verify/Cancel actions).
+- `POST .../{downtime_matrix_import}/verify`, `POST .../{downtime_matrix_import}/cancel` — status-only transitions.
+
+**Main Flow (the parse pipeline, `App\Services\DowntimeMatrixImport\DowntimeMatrixImportService::import()`):**
+```text
+POST .../downtime-matrix-import {matrix_type, pdf_file}
+   ↓
+StoreDowntimeMatrixImportRequest (mimes:pdf, matrix_type in:BFI_BVA — HOGS rejected server-side even if the disabled <option> is tampered with)
+   ↓
+DowntimeMatrixImportService::import()
+   ├── Storage::disk('public')->put(...) — original PDF retained for audit/traceability
+   ├── PdfTextExtractor — own content-stream tokenizer (NOT Smalot\PdfParser\Page::getDataTm(),
+   │      which only walks a page's own direct stream, not Form XObjects — the real sample PDF
+   │      renders its entire table inside one such XObject) → [{text, x, y}, ...] fragments
+   ├── GridReconstructor — clusters fragment (x,y) into row/column bands anchored on the literal
+   │      "DESTINATION"/"ORIGIN" header labels; throws GridReconstructionException rather than
+   │      emitting a plausible-but-wrong grid if the header structure can't be confidently found
+   ├── MatrixGridParser — pairs row bands into origin axis-entries (Clean Area/Restricted Area
+   │      farm pairs, or single non-farm rows) and column bands into destination axis-entries
+   │      (Downtime Area/Dormitory farm pairs, or single non-farm columns); emits one candidate
+   │      row per origin×destination combination that has ANY non-blank value (value-based
+   │      emission — a self-pair or farm↔non-farm-destination cell is skipped only because it's
+   │      blank in the real PDF, never because of its position). One deliberate exception: a
+   │      destination configured `always_include_as_farm_destination` (currently "LEP, DC") always
+   │      gets a synthesized row for every farm origin even when blank — blank there means "no
+   │      downtime required," a real fact, not missing data (flagged INFO, min/max stay null)
+   ├── ImportValidator — per candidate: FacilityImportResolver (exact name → exact alias →
+   │      normalized name → normalized alias → facility-group → stationary-origin sentinel → else
+   │      UNMATCHED; AMBIGUOUS on a multi-facility normalized match) for both sides, RuleClassifier
+   │      (always returns FARM_TO_FARM / STATIONARY / OTHERS, never "doesn't fit" - STATIONARY only
+   │      for the "Outside" sentinel origin + a farm destination; FARM_TO_FARM requires the origin
+   │      itself to be farm-like, not just the destination; everything else is OTHERS, a real
+   │      category, not an error state), DowntimeNormalizer (derives whichever of Downtime Area/
+   │      Dormitory is actually present - both -> min=downtime_area, max=+dormitory; only one
+   │      present -> that value is the min, max stays null (an INFO-tier note explains why); a
+   │      present-but-unparseable value, not simply a missing one, is what's INVALID; Clean vs
+   │      Restricted consolidated only if identical, else both raw readings preserved and WARNING);
+   │      assigns final resolution_status by fixed precedence
+   │      INVALID > AMBIGUOUS > UNMATCHED > WARNING > VALID > INFO (combining every applicable finding's
+   │      message, not just the winning one), plus in-import duplicate-pair detection
+   ↓
+DowntimeMatrixImportRow::insert() (bulk) + downtime_matrix_imports status/count columns updated
+   ↓
+Preview → Verify (status→VERIFIED) or Cancel (status→CANCELLED) — staging status only
+```
+
+**Data Used:** `downtime_matrix_imports` (one row per upload), `downtime_matrix_import_rows` (one row per parsed rule), `facility_list`/`facility_aliases` (read-only, resolution) — **never** `farm_list`/`farm_aliases`, and **never** `downtime_matrix`/`downtime_stationary` (the production tables this feature is a staging front-end for, but does not write to in Phase 1).
+
+**Dependencies:**
+```text
+Downtime Matrix PDF Import
+ ├── smalot/pdfparser (composer, added for this feature — pure PHP, no external binary)
+ ├── Storage::disk('public') → downtime-matrix-imports/{import_id}/*.pdf
+ └── facility_list / facility_category / facility_aliases (read-only)
+```
+
+**Related Modules:** A staging front-end for `Admin Management`'s Downtime Matrix/Downtime Stationary submodules (same production tables, same conceptual data) but architecturally and permission-wise independent — promoting a verified import's rows into `downtime_matrix`/`downtime_stationary` is explicitly not implemented (a later phase). Reads `facility_list`/`facility_aliases` the same way `Visitor Sync`'s `FacilityResolver` does, but via its own independent `FacilityImportResolver` (different normalization: this feature's PDF uses suffix-style names with parenthetical qualifiers, e.g. "Madera Farm (Red-Act)", which `FacilityResolver`'s prefix-only normalization does not handle — the two resolvers are deliberately not shared, to avoid either one's normalization drifting to accommodate the other's source format).
+
+**Business Rules:**
+- **Never writes to `downtime_matrix`/`downtime_stationary`, in any status, including after Verify** — the only new records this feature ever creates are the import header and its staging rows. Verify/Cancel change `downtime_matrix_imports.status` only.
+- **A facility-group match (e.g. "LEP, DC" → `DC_WAREHOUSE`) is never assigned a single `facility_id`** — `origin_facility_id`/`destination_facility_id` stay null, `origin_facility_group_category`/`destination_facility_group_category` carries the category instead. Exactly **one** staging row is created per grid cell regardless of how many facilities belong to that category — the group is expanded into its current member facilities only at Preview render time (a live `FacilityList` query), never materialized as multiple staging rows. The Preview shows a group as `"{display_name} ({current member facility names})"` (e.g. "DC Warehouses (DC Plaridel, DC Sta. Rosa)") — `display_name` comes from `config('downtime_matrix_import.facility_groups')`, not the raw PDF label.
+- **Cell emission is value-based, not position-based** — a self-pair or a farm-origin×non-farm-destination cell is skipped only when genuinely blank; if either ever carries a value, it is still emitted and resolved/classified/validated normally (e.g. a populated self-pair correctly lands `INVALID`, "origin and destination resolve to the same facility", rather than being silently dropped). **One deliberate exception to "skip when blank":** a destination flagged `always_include_as_farm_destination` in config (currently only `"LEP, DC"`) always gets a synthesized `FARM_TO_FARM` row for every farm origin, even when that cell is blank in the PDF — a blank cell there is read as "no downtime required to enter a DC Warehouse" (a real business fact), not as missing data. These rows carry `minimum_downtime`/`maximum_downtime = null` and an `INFO`-tier "No downtime required for this cell." message, never `UNMATCHED`/`INVALID` on that basis.
+- **`rule_type` is a three-way classification — `FARM_TO_FARM` / `STATIONARY` / `OTHERS` — and `RuleClassifier::classify()` always returns one of the three** (revised twice, same day, per explicit user clarification; there is no "doesn't fit anywhere" case anymore, `OTHERS` is that catch-all by design):
+  - `STATIONARY`: **only** when the origin is the recognized "generic outside-the-system" sentinel — `config('downtime_matrix_import.stationary_origin_labels')`, currently just `"Outside"` — paired with a destination that resolves to category `FARM`. This matches `downtime_stationary`'s production shape: one rule per farm, no origin/destination pair, "Outside" being that rule's implicit unstated origin (the schema has no room for a second non-farm origin to map to the same farm).
+  - `FARM_TO_FARM`: the origin must actually be farm-like — a real farm **or** a facility group standing in for one (e.g. "LEP, DC" → `DC_WAREHOUSE`) — paired with a farm (or group) on the other side, symmetric either direction. A destination simply being a farm is **not**, on its own, enough — the origin has to be farm-like too, otherwise it isn't Farm-to-Farm.
+  - `OTHERS`: everything else — a non-sentinel, non-farm, non-group origin (e.g. "Organikultura Area", "Fabrication") paired with a farm destination, or any combination fitting neither rule above. Still fully resolved/validated and surfaced for review, never dropped (in the real sample PDF, both known `Others` origins are also `INVALID` — missing a Downtime Area value, only Dormitory is populated — so that finding combines with their `UNMATCHED` origin per the precedence rule below).
+- **`resolution_status` precedence is fixed:** `INVALID > AMBIGUOUS > UNMATCHED > WARNING > VALID > INFO`. Every applicable finding for a row is collected and its message included in `validation_message`; only the status itself follows the single highest-ranked finding. `INFO` (e.g. "only a minimum threshold could be derived for this cell") never wins the status — it exists purely to carry a message onto an otherwise-`VALID` row without falsely flagging it as a problem.
+- Facility resolution never fuzzy-matches — exact/normalized name or alias only, mirroring `Visitor Sync`'s `FacilityResolver` philosophy. An `UNMATCHED` row is retained and shown in Preview (never hidden/dropped) specifically so an admin can add the missing `facility_alias` via the existing `admin/facility-aliases` screen and re-upload — this is the intended workflow, not an error state to suppress.
+- **Downtime Area and Dormitory are not simple arithmetic inputs — `DowntimeNormalizer` derives whichever value is actually present** (revised the same day, per explicit user clarification, from an earlier "Downtime Area is always required" rule): both present → `minimum = downtime_area`, `maximum = downtime_area + dormitory` (unchanged); only Downtime Area present → `minimum = downtime_area`, `maximum = null`; only Dormitory present → `minimum = dormitory` (it stands in as the threshold — "hours required before entering the next area"), `maximum = null`; neither present → nothing derivable for that reading, no finding (this can only happen for one half of a Clean/Restricted pair when the other half has data — a cell that's blank on both sides for its only reading is never emitted as a candidate at all). A value that is **present but unparseable/negative** (as opposed to simply missing) is still always `INVALID` and never defaulted to 0 — that distinction, not "missing vs present," is what actually drives the `INVALID` finding now. A single-value derivation adds a non-blocking `INFO`-tier finding (rank below `VALID` in the precedence — never wins the status, but its message is still included) explaining which threshold was determined and that no maximum could be. In `FARM_TO_FARM`, if only one of Clean/Restricted yields a derivable reading, that reading is used directly (no comparison, nothing to disagree with) rather than left null.
+- **The Preview groups rows into three categories (Farm-to-Farm / Stationary / Others) behind a summary-first, tab-selected UI** — an "Import Summary" table (row/status counts per category, plus a Total row) renders before any category's row-level table; all three row-level tables are present in the page but hidden by default (plain inline JS toggling `display`, no new ajax endpoint) until the admin clicks a category tab, so a large import doesn't dump every row on first paint. The Stationary table drops the Origin/Destination columns entirely and shows a single "Designated Farm" column (the resolved destination) — since a Stationary row's origin is always the same recognized sentinel by construction, displaying it adds no information. Farm-to-Farm and Others share the same column shape (Origin/Destination both shown).
+
+**Status Lifecycle:** `downtime_matrix_imports.status`: `PENDING_VERIFICATION → VERIFIED` or `PENDING_VERIFICATION → CANCELLED` (manual, via the Preview page's actions) — both terminal, status-only, no effect on `downtime_matrix`/`downtime_stationary`. `downtime_matrix_import_rows.resolution_status` (`VALID`/`WARNING`/`UNMATCHED`/`AMBIGUOUS`/`INVALID`) is assigned once at parse time and never changes afterward in Phase 1 (rows are immutable — a re-upload creates a whole new `downtime_matrix_imports` row, it does not edit an existing one's rows).
+
+**Error Handling:** A parse-time exception (most likely `GridReconstructionException` if the PDF's header structure can't be confidently located) is caught by `DowntimeMatrixImportService::import()`, logged, and recorded on `downtime_matrix_imports.parse_error_message` — the import row still exists (viewable, cancellable) with zero staged rows, rather than the request failing outright. `StoreDowntimeMatrixImportRequest` rejects non-PDF files and any `matrix_type` other than `BFI_BVA` (422/session errors) before parsing ever starts.
+
+**Important Files:**
+
+| Component | File | Responsibility |
+|---|---|---|
+| Migrations | `database/migrations/2026_08_27_140000_create_downtime_matrix_imports_table.php`, `..._140001_create_downtime_matrix_import_rows_table.php` | Staging schema (additive only — no changes to `downtime_matrix`/`downtime_stationary`) |
+| Models | `app/Models/DowntimeMatrixImport.php` (Auditable — a real compliance entity), `app/Models/DowntimeMatrixImportRow.php` (deliberately **not** Auditable — bulk machine-generated rows under one already-audited parent, mirroring `VisitorEntryLog`'s reasoning) |
+| Config | `config/downtime_matrix_import.php` — `non_farm_axis_labels` (structural, read by `MatrixGridParser`), `facility_groups` (resolution → `FARM_TO_FARM`, read by `FacilityImportResolver`; each group's `always_include_as_farm_destination` flag — currently only "LEP, DC" — is read by `MatrixGridParser` to force-synthesize a "no downtime required" row per farm even when blank), and `stationary_origin_labels` (resolution → `STATIONARY`, currently just `"Outside"`, read by `FacilityImportResolver`/`RuleClassifier`) — three deliberately separate concerns, not all reducible to one list |
+| Services | `app/Services/DowntimeMatrixImport/{PdfTextExtractor,GridReconstructor,MatrixGridParser,FacilityImportResolver,FacilityResolutionResult,ParsedDowntimeValue,DowntimeNormalizer,RuleClassifier,ImportValidator,DowntimeMatrixImportService}.php` |
+| Controller | `app/Http/Controllers/Admin/DowntimeMatrixImportController.php` — the one Admin controller in this codebase that delegates to a service instead of doing direct Eloquent (the parse pipeline is too complex for the usual pattern); also the only one whose `view()` helper takes a per-call-site full-page fallback, since its upload form is a deliberate non-ajax plain POST (see Known Constraints) |
+| Request | `app/Http/Requests/Admin/StoreDowntimeMatrixImportRequest.php` |
+| Views | `resources/views/admin/downtime-matrix-import/{index,create,show}.blade.php` (full-page wrappers) and `_{index,create,show}.blade.php` (ajax partials) |
+| Tests | `tests/Unit/Services/DowntimeMatrixImport/*.php`, `tests/Feature/Admin/DowntimeMatrixImportAdminTest.php` (includes the real sample PDF as a fixture, and a standalone test asserting `downtime_matrix`/`downtime_stationary` are never written to) |
+
+**Configuration:** `config/downtime_matrix_import.php` (see above). No new environment variables — `smalot/pdfparser` is a composer dependency only.
+
+**Known Constraints:** Single page only — `PdfTextExtractor` reads page 1 and does not support a multi-page matrix. Synchronous parsing on the upload request — no queue; fine for the current single-page/~100-cell document, would need revisiting if a much larger matrix appears. The upload form (`_create.blade.php`) is **deliberately not** an `.ajax-form` — `public/js/admin.js` submits ajax-forms via jQuery's `form.serialize()`, which silently drops file inputs, so this one form does a plain `multipart/form-data` browser POST instead; every other action in this feature (Verify/Cancel) uses the standard `.ajax-form` convention normally. `GridReconstructor`'s coordinate-clustering tolerances (`Y_TOLERANCE = 3.0`, the 100/200 origin-label-region X cutoffs) were tuned against the one real sample PDF in `documents/` and `tests/Fixtures/` — a structurally different BFI/BVA layout (e.g. a different number of farms, or non-uniform row/column spacing) may need them revisited. Facility resolution depends on `facility_aliases` being populated for any PDF label that doesn't collapse to an exact/normalized `facility_list.facility_name` — with zero aliases seeded (the real production starting state), most real rows land `WARNING` (normalized match) rather than `VALID`, which is correct/expected, not a bug.
+
+**Important Notes for Future Changes:** Promoting verified staging rows into `downtime_matrix`/`downtime_stationary` is the natural next phase — when building it, gate on `resolution_status` (e.g. require zero `UNMATCHED`/`AMBIGUOUS`/`INVALID` rows before allowing promotion; the `*_rows_count` columns on `downtime_matrix_imports` already support this cheaply) and continue to expand a facility-group row into its *current* member facilities at promotion time, not by reusing whatever was true at parse time. Do not modify `FacilityResolver` (Visitor Sync's) to share logic with `FacilityImportResolver` — their normalization rules solve different, incompatible source-text conventions (AppSheet's prefix style vs. this PDF's suffix+parenthetical style); if genuine duplication needs removing later, extract only the parts that are truly identical (e.g. the alias-lookup query shape), not the normalization functions themselves. If `GridReconstructor` needs to support a second PDF layout, prefer adding new anchor/config-driven detection over hardcoding a second parsing path.
 
 ---
 
@@ -901,6 +1009,14 @@ AuditLog::create([user_id: auth()->id(), action, module: class_basename($this), 
         │        ↑ gated by ↓                                          │
         │  Authentication & Authorization                              │
         └───────────────────────────────────────────────────────────┘
+                                     ▲
+                                     │ staging front-end, no reverse dependency
+                          ┌─────────────────────────────┐
+                          │ Downtime Matrix PDF Import     │
+                          │ (parse/validate/preview only —│
+                          │  never writes downtime_matrix/ │
+                          │  downtime_stationary, Phase 1) │
+                          └─────────────────────────────┘
 ```
 
 **In plain language:**
@@ -909,6 +1025,7 @@ AuditLog::create([user_id: auth()->id(), action, module: class_basename($this), 
 - `Kiosk Self-Service` is a parallel, self-contained path that bypasses both `Visitor Sync` and `Visitor Registration` entirely — Gatesale/Truck visitors are created and registered at the kiosk itself, then immediately reuse `Kiosk Entry`'s `processEntry` state machine.
 - `Face Matching` is a pure dependency of three modules, with no dependencies of its own.
 - `Google Sheets Integration` and `Session Auto-Resolution` are both one-way consumers of state produced by the two Kiosk modules; neither ever triggers a write back into `visitor_request`/`visitor_session` that the Kiosk modules would need to react to (except `Session Auto-Resolution`'s own status updates, which are themselves terminal).
+- `Downtime Matrix PDF Import` sits beside `Admin Management` as a staging front-end for its Downtime Matrix/Downtime Stationary submodules — it reads `facility_list`/`facility_aliases` the same layer does, but (in Phase 1) never writes into `downtime_matrix`/`downtime_stationary` themselves, and nothing else in the runtime depends on it.
 
 ---
 
@@ -984,6 +1101,10 @@ farm_list ──▶ farm_aliases
 
 (cross-cutting) audit_logs — one row per create/update/delete on any Auditable model, FK to users.user_id (nullable)
 api_logs — one row per Visitor Sync call and per Google Sheets write attempt
+
+downtime_matrix_imports ──▶ downtime_matrix_import_rows ──▶ facility_list (origin/destination, nullable)
+(new 2026-08-27, Downtime Matrix PDF Import module — staging only, Phase 1;
+ NOT connected to downtime_matrix/downtime_stationary in any direction)
 ```
 
 ### Entity notes
@@ -1002,6 +1123,7 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 - **`audit_logs`** — Purpose: append-only change log, see the Audit Logging module.
 - **`api_logs`** — Purpose: append-only integration call log, shared by Visitor Sync and Google Sheets Integration (both write to the same table, distinguished by `endpoint`).
 - **`facility_type`** / **`facility_category`** / **`facility_list`** / **`facility_aliases`** (new tables, 2026-08-27 — see the "Facility Master Data" module above) — Purpose: normalized, multi-brand replacement structure for `farm_list`/`farm_aliases`, seeded with real reference data (8 types, 4 categories, 16 facilities). **As of the same-day Phase 2 cutover, this is now the live, authoritative site-binding target** for `visitor_request.facility_id` and `kiosk_device.facility_id`, and the resolution target for Visitor Sync's `FacilityResolver`. `facility_list.facility_code` is real for the 8 facilities that correspond to a `farm_list` row, still placeholder (`TYPE-SLUG`) for the other 8. No admin CRUD exists for any of these 4 tables yet.
+- **`downtime_matrix_imports`** / **`downtime_matrix_import_rows`** (new tables, 2026-08-27 — see the "Downtime Matrix PDF Import" module) — Purpose: staging area for a PDF-parsed downtime matrix pending human review, entirely separate from `downtime_matrix`/`downtime_stationary`. `downtime_matrix_imports` (`import_id` PK): one row per upload, `status` (`PENDING_VERIFICATION`/`VERIFIED`/`CANCELLED`), `stored_file_path` (the original PDF, retained for audit), denormalized `*_rows_count` columns, `uploaded_by`/`verified_by`/`cancelled_by` (FK → `users.user_id`, the latter two nullable with `nullOnDelete()` so deleting a user never deletes import history). `downtime_matrix_import_rows` (`import_row_id` PK): one row per parsed rule, `rule_type` (`FARM_TO_FARM`/`STATIONARY`), `origin_raw_label`/`destination_raw_label` (verbatim PDF text), `origin_facility_id`/`destination_facility_id` (nullable FK → `facility_list.facility_id`, `nullOnDelete()` — null whenever unresolved OR resolved to a facility *group*, in which case `origin_facility_group_category`/`destination_facility_group_category` carries the category instead, e.g. `DC_WAREHOUSE`), `resolution_status` (`VALID`/`WARNING`/`UNMATCHED`/`AMBIGUOUS`/`INVALID`), `validation_message`. **No FK, direct or indirect, exists from either table to `downtime_matrix`/`downtime_stationary`** — this is Phase 1's hard boundary, not an oversight.
 
 ---
 
@@ -1039,7 +1161,7 @@ api_logs — one row per Visitor Sync call and per Google Sheets write attempt
 
 ### Authenticated admin panel (`routes/web.php`, `auth` + `permission:<key>`)
 
-Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/facilities`, `admin/facility-aliases`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, and `admin/audit-logs` (`index` only — read-only). `admin/biosecurity-rules` is a `GET`-only landing route (`biosecurity-rules.index`, two-card partial, no CRUD of its own); its two submodules are full resource routes nested under it: `admin/biosecurity-rules/downtime-matrix` (route names `downtime-matrix.*`) and `admin/biosecurity-rules/downtime-stationary` (route names `downtime-stationary.*`). See §2's Admin Management module for the permission-key mapping and the submodule load flow. `admin/farms`/`admin/farm-aliases` were removed 2026-08-27 (Phase 5) along with the legacy Farm admin module — see "Facility Master Data."
+Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`destroy`) for: `admin/facilities`, `admin/facility-aliases`, `admin/kiosks` (+ `POST admin/kiosks/{kiosk}/regenerate-token`), `admin/identity-types`, `admin/employee-types`, `admin/roles` (+ `GET`/`POST admin/roles/{role}/permissions`), `admin/users`, and `admin/audit-logs` (`index` only — read-only). `admin/biosecurity-rules` is a `GET`-only landing route (`biosecurity-rules.index`, now a three-card partial, no CRUD of its own); its two CRUD submodules are full resource routes nested under it: `admin/biosecurity-rules/downtime-matrix` (route names `downtime-matrix.*`) and `admin/biosecurity-rules/downtime-stationary` (route names `downtime-stationary.*`). See §2's Admin Management module for the permission-key mapping and the submodule load flow. `admin/farms`/`admin/farm-aliases` were removed 2026-08-27 (Phase 5) along with the legacy Farm admin module — see "Facility Master Data." The landing page's third card, `admin/biosecurity-rules/downtime-matrix-import` (route names `downtime-matrix-import.*`: `index`/`create`/`store`/`show`/`verify`/`cancel` — not a full `Route::resource`, no `edit`/`update`/`destroy`), is the "Downtime Matrix PDF Import" module (added 2026-08-27) — gated by its own `downtime_matrix_import.manage` permission rather than `biosecurity.manage`, and the landing route itself now accepts either key.
 
 ### Auth endpoints (`routes/web.php`, public)
 
@@ -1118,6 +1240,12 @@ Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`dest
 13. **RBAC is enforced twice (Admin Management):** route middleware (`permission:<key>`) and FormRequest `authorize()` must both check the same key — this is intentional defense-in-depth, not redundant code to simplify away.
 14. **Audit trail is automatic and synchronous** for every `Auditable` model — do not remove the trait from a business-entity model without a deliberate, discussed reason.
 15. **Biosecurity Rules uniqueness (Admin Management):** `downtime_matrix` allows at most one rule per `(origin_facility_id, destination_facility_id)` pair; `downtime_stationary` allows at most one rule per `assigned_facility_id` (both columns renamed from `*_farm_id` in the 2026-08-27 Phase 4 cutover — FK now points at `facility_list`, not `farm_list`). Both are enforced by a DB-level `UNIQUE` constraint (added 2026-08-27) and mirrored in the FormRequest validation layer so violations surface as a normal 422, not a raw SQL error — do not remove either layer independently.
+16. **Downtime Matrix PDF Import never writes to `downtime_matrix`/`downtime_stationary` (Phase 1):** the only records this feature creates are `downtime_matrix_imports`/`downtime_matrix_import_rows`; Verify/Cancel change staging status only. A future promotion phase is explicitly out of scope until built.
+17. **A facility-group match in Downtime Matrix PDF Import is never assigned a single `facility_id`** — one staging row per grid cell regardless of group size; the group is expanded into current member facilities only at Preview render time, never materialized as multiple rows.
+18. **Downtime Matrix PDF Import's `resolution_status` precedence is fixed:** `INVALID > AMBIGUOUS > UNMATCHED > WARNING > VALID > INFO`, with every applicable finding's message combined in `validation_message` — do not change to a first-match-wins scheme. `INFO` never wins the status; it only carries an explanatory message.
+20. **Downtime Matrix PDF Import derives a threshold from whichever of Downtime Area/Dormitory is present, not just Downtime Area:** a missing (not simply present-but-garbage) Downtime Area is no longer automatically `INVALID` — Dormitory alone still yields a `minimum_downtime` (with `maximum_downtime` left null). Only a value that is present but unparseable/negative is `INVALID`.
+21. **Every farm gets a Farm-to-Farm row to "LEP, DC" (DC Warehouses) even when that PDF cell is blank** — configured via `always_include_as_farm_destination` in `config('downtime_matrix_import.facility_groups')`. A blank cell there means no downtime is required, not missing data: the synthesized row carries `minimum_downtime`/`maximum_downtime = null` and an `INFO`-tier message, never `UNMATCHED`/`INVALID`. This is currently scoped only to "LEP, DC" — do not generalize it to every non-farm destination without being asked.
+19. **Downtime Matrix PDF Import classifies every row into exactly one of three categories — `FARM_TO_FARM` / `STATIONARY` / `OTHERS` — never a "doesn't fit" case:** `STATIONARY` requires the recognized "Outside" sentinel origin paired with a farm destination (mirrors `downtime_stationary`'s one-rule-per-farm production shape); `FARM_TO_FARM` requires the origin itself to be farm-like (a real farm or the "LEP, DC" group), not just the destination; everything else (e.g. "Organikultura Area", "Fabrication") is `OTHERS`, a real category shown in its own Preview tab, not an error state.
 
 ---
 
@@ -1151,6 +1279,14 @@ Owning module: Kiosk Entry / Kiosk Self-Service (all manual transitions, shared 
 ### `visitor_request.approval_status`
 
 Effectively constant: always `Approved` in every code path that creates a request (Visitor Sync, Kiosk Self-Service). No rejection/pending-approval workflow exists inside this codebase — approval, where it happens at all (AppSheet), happens entirely upstream.
+
+### `downtime_matrix_imports.status`
+
+```text
+PENDING_VERIFICATION ──(admin clicks Verify)──▶ VERIFIED
+PENDING_VERIFICATION ──(admin clicks Cancel)──▶ CANCELLED
+```
+Owning module: Downtime Matrix PDF Import. Both target states are terminal and status-only — neither transition reads or writes `downtime_matrix`/`downtime_stationary`. `downtime_matrix_import_rows.resolution_status` (`VALID`/`WARNING`/`UNMATCHED`/`AMBIGUOUS`/`INVALID`) is a separate, per-row value assigned once at parse time by a fixed precedence and never changes afterward — it is not itself a state machine (rows are immutable in Phase 1).
 
 ---
 
@@ -1190,6 +1326,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 | Google Sheets Integration | `app/Services/GoogleSheets/GoogleSheetsClient.php`, `app/Services/GoogleSheets/VisitorSheetWriter.php`, `app/Providers/AppServiceProvider.php` |
 | Session Auto-Resolution | `app/Console/Commands/ResolveExpiredVisitorSessions.php`, `routes/console.php` |
 | Biosecurity Rules (Downtime Matrix / Downtime Stationary) | `app/Http/Controllers/Admin/BiosecurityRuleController.php` (landing/cards only), `app/Http/Controllers/Admin/DowntimeMatrixController.php`, `app/Http/Controllers/Admin/DowntimeStationaryController.php`, `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php` |
+| Downtime Matrix PDF Import | `app/Services/DowntimeMatrixImport/*.php` (`DowntimeMatrixImportService`, `PdfTextExtractor`, `GridReconstructor`, `MatrixGridParser`, `FacilityImportResolver`, `DowntimeNormalizer`, `RuleClassifier`, `ImportValidator`), `app/Http/Controllers/Admin/DowntimeMatrixImportController.php`, `app/Models/{DowntimeMatrixImport,DowntimeMatrixImportRow}.php`, `config/downtime_matrix_import.php` |
 | Facility Master Data | `app/Models/{FacilityType,FacilityCategory,FacilityList,FacilityAlias}.php`, `app/Services/FacilityResolver.php`, `app/Http/Controllers/Admin/{Facility,FacilityAlias}Controller.php`, `database/seeders/Facility{Type,Category,List}Seeder.php`, `database/migrations/2026_08_27_110000_*` through `..._120002_*` |
 | Admin Management | `app/Http/Controllers/Admin/*.php`, `app/Http/Requests/Admin/*.php`, `app/Services/{AuthService,RolePermissionService,AuditLogService}.php` |
 | Authentication & Authorization | `app/Http/Controllers/Auth/LoginController.php`, `app/Services/AuthService.php`, `app/Http/Middleware/CheckPermission.php`, `app/Models/User.php` |
@@ -1208,7 +1345,7 @@ Effectively constant: always `Approved` in every code path that creates a reques
 5. Trace cross-module flows (§4) before changing anything shared: `processEntry`, `FaceMatchingService`, `VisitorRequest::isCompleted()`/`isExcludedFromGoogleSheets()`, the `Auditable` trait.
 6. Check whether an existing service already performs the operation you're about to add — this codebase consistently centralizes shared logic (one `FaceMatchingService`, one `processEntry`, one `pickBestActiveRequest`) rather than duplicating it per call site; follow that pattern.
 7. Reuse existing services instead of writing parallel logic, especially for anything touching face matching, session state, or Google Sheets exclusion.
-8. Do not change any of the 14 business rules in §9 unless explicitly asked to.
+8. Do not change any of the 21 business rules in §9 unless explicitly asked to.
 9. Do not change the shape of any kiosk/API JSON response (`success`/`type`/`message` conventions) without checking the corresponding frontend (`resources/views/kiosk/show.blade.php`, `resources/views/visitor/*.blade.php`) and the test suite (`tests/Feature/Kiosk/*`, `tests/Feature/Visitor/*`) for every consumer.
 10. Do not hardcode or log secrets (`SYNC_API_KEY`, Google service-account contents) — both are already externalized correctly; keep them that way.
 11. Preserve the Google Sheets exclusion rule and the non-blocking/best-effort nature of Sheets writes when touching `VisitorKioskService` or `ResolveExpiredVisitorSessions`.
@@ -1309,6 +1446,30 @@ If the request is about the scheduled cleanup job:
     Implement change
     ↓
     Update this file if a new terminal state or resolution path is added
+
+If the request is about Downtime Matrix PDF Import (upload, parsing, facility
+resolution, or promoting staged rows into production):
+    Read §2 "Downtime Matrix PDF Import" in full — the parse pipeline's five
+    stages (extract → reconstruct grid → parse candidates → resolve/classify/
+    normalize/validate → stage) each live in their own class under
+    app/Services/DowntimeMatrixImport/
+    ↓
+    Confirm whether the change touches Phase 1's hard boundary (never writing
+    downtime_matrix/downtime_stationary) — if promoting rows to production is
+    now in scope, that is new work, not a Phase 1 bug fix
+    ↓
+    If touching facility resolution, do not reuse/modify App\Services\FacilityResolver
+    (Visitor Sync's) — this module's FacilityImportResolver has its own
+    normalization for a different source-text convention, deliberately kept separate
+    ↓
+    If touching grid parsing, remember GridReconstructor's tolerances were tuned
+    against one real PDF (documents/ and tests/Fixtures/) — verify against the
+    real fixture PDF test, expect to need iteration for a structurally different layout
+    ↓
+    Implement change
+    ↓
+    Update this file if the staging schema, resolution_status precedence, or the
+    production-table boundary changes
 ```
 
 ---
@@ -1316,22 +1477,22 @@ If the request is about the scheduled cleanup job:
 ## 17. System Quick Reference
 
 ### Modules
-Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck) · Face Matching · Google Sheets Integration · Session Auto-Resolution · Facility Master Data (live site-binding target since the 2026-08-27 cutover) · Admin Management · Authentication & Authorization · Audit Logging (cross-cutting)
+Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck) · Face Matching · Google Sheets Integration · Session Auto-Resolution · Facility Master Data (live site-binding target since the 2026-08-27 cutover) · Admin Management · Downtime Matrix PDF Import (Phase 1 — parse/validate/preview only, added 2026-08-27) · Authentication & Authorization · Audit Logging (cross-cutting)
 
 ### Main APIs
-`POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` · `/register/visitor/*` (public) · `/admin/*` (authenticated resource routes) · `/login`, `/logout`
+`POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` · `/register/visitor/*` (public) · `/admin/*` (authenticated resource routes) · `/admin/biosecurity-rules/downtime-matrix-import/*` (upload/preview/verify/cancel) · `/login`, `/logout`
 
 ### Main Data Entities
-`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` (site-bound via `facility_id`) · `visitor_session` · `visitor_entry_logs` · `kiosk_device` (site-bound via `facility_id`) · `facility_type` / `facility_category` / `facility_list` / `facility_aliases` (live site-binding target for `visitor_request`, `kiosk_device`, `downtime_matrix`, and `downtime_stationary` since 2026-08-27, now with a full admin CRUD) · `farm_list` / `farm_aliases` (pure legacy data as of 2026-08-27 Phase 5 — no admin UI, no remaining FKs, `FarmList`/`FarmAlias` models kept but unused) · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`, facility-based since the 2026-08-27 Phase 4 cutover) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
+`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` (site-bound via `facility_id`) · `visitor_session` · `visitor_entry_logs` · `kiosk_device` (site-bound via `facility_id`) · `facility_type` / `facility_category` / `facility_list` / `facility_aliases` (live site-binding target for `visitor_request`, `kiosk_device`, `downtime_matrix`, and `downtime_stationary` since 2026-08-27, now with a full admin CRUD) · `farm_list` / `farm_aliases` (pure legacy data as of 2026-08-27 Phase 5 — no admin UI, no remaining FKs, `FarmList`/`FarmAlias` models kept but unused) · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`, facility-based since the 2026-08-27 Phase 4 cutover) · `downtime_matrix_imports` / `downtime_matrix_import_rows` (Downtime Matrix PDF Import staging tables, added 2026-08-27 — never connected to `downtime_matrix`/`downtime_stationary`) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
 
 ### External Systems
 AppSheet (inbound webhook, one-way) · Google Sheets API (outbound write, one-way) · `face-api.js` + `jsQR` (client-side, CDN-loaded)
 
 ### Critical Business Rules
-Directory merge requires full_name+email match · No fuzzy farm matching · Terminal request states are permanent · Farm binding double-enforced · Gatesale/Truck: one active visit globally, guarded by a directory-keyed lock · Google Sheets writes excluded for Gatesale/Truck and always best-effort/non-blocking · Session Auto-Resolution never fabricates recovered times · Biometric conflict never blocks QR entry · RBAC checked at both route and FormRequest layers · Downtime Matrix/Stationary uniqueness enforced at both DB and FormRequest layers
+Directory merge requires full_name+email match · No fuzzy farm matching · Terminal request states are permanent · Farm binding double-enforced · Gatesale/Truck: one active visit globally, guarded by a directory-keyed lock · Google Sheets writes excluded for Gatesale/Truck and always best-effort/non-blocking · Session Auto-Resolution never fabricates recovered times · Biometric conflict never blocks QR entry · RBAC checked at both route and FormRequest layers · Downtime Matrix/Stationary uniqueness enforced at both DB and FormRequest layers · Downtime Matrix PDF Import never writes to `downtime_matrix`/`downtime_stationary` and never assigns a facility-group match a single `facility_id`
 
 ### Critical Constraints
-Face matching is an unindexed linear PHP scan · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap, unlike `facility_list`, which got one 2026-08-27) · every Admin controller's `view()` fallback for `create()`/`edit()` on a non-AJAX request throws (never triggered in real use, see Known Issue #11)
+Face matching is an unindexed linear PHP scan · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap, unlike `facility_list`, which got one 2026-08-27) · every Admin controller's `view()` fallback for `create()`/`edit()` on a non-AJAX request throws (never triggered in real use, see Known Issue #11) · Downtime Matrix PDF Import's grid-reconstruction tolerances are tuned against one real PDF layout and its parsing is synchronous/single-page only
 
 ### Most Important Files
-`app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php`
+`app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php` · `app/Services/DowntimeMatrixImport/DowntimeMatrixImportService.php`
