@@ -4,6 +4,7 @@ namespace Tests\Feature\Admin;
 
 use App\Models\DowntimeMatrix;
 use App\Models\DowntimeMatrixImport;
+use App\Models\DowntimeMatrixImportRow;
 use App\Models\DowntimeStationary;
 use App\Models\FacilityList;
 use App\Models\Permission;
@@ -84,6 +85,11 @@ class DowntimeMatrixImportAdminTest extends TestCase
     private function ajaxGet(string $url)
     {
         return $this->get($url, self::AJAX_HEADER);
+    }
+
+    private function ajaxPut(string $url, array $data = [])
+    {
+        return $this->put($url, $data, self::AJAX_HEADER);
     }
 
     /**
@@ -369,6 +375,110 @@ class DowntimeMatrixImportAdminTest extends TestCase
         $this->assertSame($preExistingStationaryCount, DowntimeStationary::count(), 'downtime_stationary must never be written to by the import pipeline, even after Verify.');
     }
 
+    // --- Production promotion (confirmation step, status-only) -------------
+
+    public function test_index_page_renders_the_conditional_production_action(): void
+    {
+        $this->upload();
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.index'));
+
+        $response->assertOk();
+        // The Production button is rendered client-side by renderActions()
+        // in the DataTables columns config, gated on row.status - there is
+        // no server-rendered per-row HTML to assert on directly (same as
+        // every other action button in this Data Table), so this locks in
+        // that the gating condition and the button text are actually
+        // present in the served page.
+        $response->assertSee("row.status === 'VERIFIED'", false);
+        $response->assertSee('Production', false);
+    }
+
+    public function test_promote_confirm_falls_back_to_plain_preview_unless_verified(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $this->assertSame('PENDING_VERIFICATION', $import->status);
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.promote.confirm', $import));
+
+        $response->assertOk();
+        $response->assertDontSee('Confirm Production Promotion');
+        $response->assertDontSee('Save to Production');
+    }
+
+    public function test_promote_confirm_shows_the_confirmation_step_when_verified(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.promote.confirm', $import));
+
+        $response->assertOk();
+        $response->assertSee('Confirm Production Promotion');
+        $response->assertSee('Save to Production');
+        // The confirmation step is a review of the same Preview, not a
+        // separate summary - its three Data Table tabs must still be there.
+        $response->assertSee('id="dmi-ftf-table"', false);
+    }
+
+    public function test_promote_marks_the_import_promoted_and_writes_nothing_to_production_tables(): void
+    {
+        $this->seedRealFacilityData();
+        $preExistingMatrixCount = DowntimeMatrix::count();
+        $preExistingStationaryCount = DowntimeStationary::count();
+
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $rowCountBefore = $import->rows()->count();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+        $editor = auth()->user();
+
+        $this->ajaxPost(route('downtime-matrix-import.promote', $import))->assertOk();
+
+        $import->refresh();
+        $this->assertSame('PROMOTED', $import->status);
+        $this->assertSame($editor->user_id, $import->promoted_by);
+        $this->assertNotNull($import->promoted_at);
+        $this->assertSame($rowCountBefore, $import->rows()->count(), 'Promoting must never add/remove/alter staged rows.');
+        $this->assertSame($preExistingMatrixCount, DowntimeMatrix::count(), 'downtime_matrix must never be written to by promotion in this phase.');
+        $this->assertSame($preExistingStationaryCount, DowntimeStationary::count(), 'downtime_stationary must never be written to by promotion in this phase.');
+    }
+
+    public function test_promote_is_a_no_op_unless_verified(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $this->assertSame('PENDING_VERIFICATION', $import->status);
+
+        $this->ajaxPost(route('downtime-matrix-import.promote', $import))->assertOk();
+
+        $import->refresh();
+        $this->assertSame('PENDING_VERIFICATION', $import->status, 'Promoting a non-VERIFIED import must be a no-op.');
+        $this->assertNull($import->promoted_by);
+        $this->assertNull($import->promoted_at);
+    }
+
+    public function test_promote_requires_permission(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $role = Role::create(['role_name' => 'NoPermissions']);
+        $this->actingAs(User::create([
+            'role_id' => $role->role_id,
+            'user_name' => 'nobody',
+            'user_email' => 'nobody@example.com',
+            'hash_password' => bcrypt('password'),
+            'is_active' => true,
+        ]));
+
+        $this->get(route('downtime-matrix-import.promote.confirm', $import))->assertForbidden();
+        $this->post(route('downtime-matrix-import.promote', $import))->assertForbidden();
+    }
+
     // --- Preview page Data Table (rows-data) --------------------------------
 
     public function test_show_page_shell_has_all_three_tabs_but_leaks_no_row_data(): void
@@ -605,5 +715,230 @@ class DowntimeMatrixImportAdminTest extends TestCase
         ]));
 
         $this->getJson(route('downtime-matrix-import.rows-data', $import))->assertForbidden();
+    }
+
+    public function test_update_rows_resolves_an_unmatched_row_and_marks_it_valid(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $unmatched = $import->rows()
+            ->where('origin_raw_label', 'Organikultura Area')
+            ->firstOrFail();
+        $this->assertNull($unmatched->origin_facility_id);
+
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        $destinationFacilityId = $unmatched->destination_facility_id;
+        $this->assertNotNull($destinationFacilityId, 'destination should already be resolved for this fixture row');
+
+        $editor = auth()->user();
+
+        $response = $this->ajaxPut(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [
+                $unmatched->import_row_id => [
+                    'origin_facility_id' => $saturn->facility_id,
+                    'destination_facility_id' => $destinationFacilityId,
+                    'minimum_downtime' => 12,
+                    'maximum_downtime' => 24,
+                ],
+            ],
+        ]);
+
+        $response->assertOk();
+
+        // The modal reads this JSON response directly (no page reload) to
+        // confirm the save actually applied - it must reflect the new state,
+        // not the pre-edit one.
+        $response->assertJsonPath('applied', true);
+        $savedRow = collect($response->json('rows'))->firstWhere('import_row_id', $unmatched->import_row_id);
+        $this->assertNotNull($savedRow);
+        $this->assertSame($saturn->facility_id, $savedRow['origin_facility_id']);
+        $this->assertSame('VALID', $savedRow['resolution_status']);
+        $this->assertEquals(12.0, $savedRow['minimum_downtime']);
+        $this->assertEquals(24.0, $savedRow['maximum_downtime']);
+
+        $unmatched->refresh();
+        $this->assertSame($saturn->facility_id, $unmatched->origin_facility_id);
+        $this->assertSame('VALID', $unmatched->resolution_status);
+        $this->assertStringContainsString('Manually verified by', $unmatched->validation_message);
+        $this->assertEquals(12.0, (float) $unmatched->minimum_downtime);
+        $this->assertEquals(24.0, (float) $unmatched->maximum_downtime);
+        $this->assertSame($editor->user_id, $unmatched->edited_by);
+        $this->assertNotNull($unmatched->edited_at);
+    }
+
+    public function test_update_rows_stays_unmatched_when_a_needed_facility_is_left_unresolved(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $unmatched = $import->rows()->where('origin_raw_label', 'Fabrication')->firstOrFail();
+
+        $this->ajaxPut(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [
+                $unmatched->import_row_id => [
+                    'origin_facility_id' => null,
+                    'destination_facility_id' => $unmatched->destination_facility_id,
+                    'minimum_downtime' => $unmatched->minimum_downtime,
+                    'maximum_downtime' => null,
+                ],
+            ],
+        ])->assertOk();
+
+        $unmatched->refresh();
+        $this->assertSame('UNMATCHED', $unmatched->resolution_status);
+        $this->assertStringContainsString('origin', $unmatched->validation_message);
+    }
+
+    public function test_update_rows_flags_invalid_when_maximum_is_less_than_minimum(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $row = $import->rows()->firstOrFail();
+
+        $this->ajaxPut(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [
+                $row->import_row_id => [
+                    'origin_facility_id' => $row->origin_facility_id,
+                    'destination_facility_id' => $row->destination_facility_id,
+                    'minimum_downtime' => 24,
+                    'maximum_downtime' => 12,
+                ],
+            ],
+        ])->assertOk();
+
+        $row->refresh();
+        $this->assertSame('INVALID', $row->resolution_status);
+        $this->assertStringContainsString('cannot be less than minimum', $row->validation_message);
+    }
+
+    public function test_update_rows_recomputes_the_parents_denormalized_counts(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $validCountBefore = $import->valid_rows_count;
+        $totalBefore = $import->valid_rows_count + $import->warning_rows_count + $import->unmatched_rows_count + $import->ambiguous_rows_count + $import->invalid_rows_count;
+
+        $unmatched = $import->rows()->where('origin_raw_label', 'Organikultura Area')->firstOrFail();
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+
+        $this->ajaxPut(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [
+                $unmatched->import_row_id => [
+                    'origin_facility_id' => $saturn->facility_id,
+                    'destination_facility_id' => $unmatched->destination_facility_id,
+                    'minimum_downtime' => 12,
+                    'maximum_downtime' => 24,
+                ],
+            ],
+        ])->assertOk();
+
+        $import->refresh();
+        $this->assertSame($validCountBefore + 1, $import->valid_rows_count, 'the edited row should now count toward valid_rows_count');
+        $this->assertSame(
+            $totalBefore,
+            $import->valid_rows_count + $import->warning_rows_count + $import->unmatched_rows_count + $import->ambiguous_rows_count + $import->invalid_rows_count,
+            'total row count must be conserved across the recompute'
+        );
+        $this->assertSame($import->valid_rows_count, DowntimeMatrixImportRow::where('import_id', $import->import_id)->where('resolution_status', 'VALID')->count());
+    }
+
+    public function test_update_rows_does_nothing_once_verified(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $row = $import->rows()->where('resolution_status', '!=', 'VALID')->firstOrFail();
+        $originalStatus = $row->resolution_status;
+
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import));
+
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        $response = $this->ajaxPut(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [
+                $row->import_row_id => [
+                    'origin_facility_id' => $saturn->facility_id,
+                    'destination_facility_id' => $saturn->facility_id,
+                    'minimum_downtime' => 1,
+                    'maximum_downtime' => 2,
+                ],
+            ],
+        ]);
+        $response->assertOk();
+        $response->assertJsonPath('applied', false);
+
+        $row->refresh();
+        $this->assertSame($originalStatus, $row->resolution_status);
+        $this->assertNull($row->edited_by, 'Editing rows on a VERIFIED import must be a no-op.');
+    }
+
+    public function test_update_rows_requires_permission(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+        $row = $import->rows()->firstOrFail();
+
+        $role = Role::create(['role_name' => 'NoPermissions']);
+        $this->actingAs(User::create([
+            'role_id' => $role->role_id,
+            'user_name' => 'nobody',
+            'user_email' => 'nobody@example.com',
+            'hash_password' => bcrypt('password'),
+            'is_active' => true,
+        ]));
+
+        $this->put(route('downtime-matrix-import.rows.update', $import), [
+            'rows' => [$row->import_row_id => ['minimum_downtime' => 1]],
+        ])->assertForbidden();
+    }
+
+    public function test_edit_modal_is_enabled_only_while_pending_verification(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        // Row-level Edit buttons are rendered client-side by the DataTables
+        // render() callback, not server-rendered per row - so what the
+        // server actually controls is the canEdit JS flag renderActions()
+        // checks before emitting a button at all.
+        $this->ajaxGet(route('downtime-matrix-import.show', $import))
+            ->assertOk()
+            ->assertSee('var canEdit = true;', false)
+            ->assertSee('id="dmi-edit-modal"', false);
+
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import));
+
+        $this->ajaxGet(route('downtime-matrix-import.show', $import))
+            ->assertOk()
+            ->assertSee('var canEdit = false;', false);
+    }
+
+    public function test_rows_data_includes_the_raw_fields_the_edit_modal_needs(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $unmatched = $import->rows()
+            ->where('rule_type', 'OTHERS')
+            ->where('origin_raw_label', 'Organikultura Area')
+            ->firstOrFail();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=OTHERS&length=100');
+        $response->assertOk();
+
+        $payload = collect($response->json('data'))->firstWhere('import_row_id', $unmatched->import_row_id);
+        $this->assertNotNull($payload);
+        $this->assertSame('OTHERS', $payload['rule_type']);
+        $this->assertSame('Organikultura Area', $payload['origin_raw_label']);
+        $this->assertArrayHasKey('destination_raw_label', $payload);
+        $this->assertNull($payload['origin_facility_id']);
+        $this->assertSame($unmatched->destination_facility_id, $payload['destination_facility_id']);
     }
 }

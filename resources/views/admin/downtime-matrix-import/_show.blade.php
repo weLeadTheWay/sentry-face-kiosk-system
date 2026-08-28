@@ -10,17 +10,24 @@
             $statusColor = match($downtime_matrix_import->status) {
                 'VERIFIED' => '#28a745',
                 'CANCELLED' => '#6c757d',
+                'PROMOTED' => '#6f42c1',
                 default => '#ffc107',
             };
         @endphp
         <span style="background: {{ $statusColor }}; color: white; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 12px;">{{ $downtime_matrix_import->status }}</span>
     </p>
     <p><strong>Uploaded By:</strong> {{ $downtime_matrix_import->uploadedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->created_at?->format('n/d/Y H:i') }}</p>
-    @if($downtime_matrix_import->isVerified())
+    {{-- Checked by whether each timestamp is set, not by the current status -
+         once a VERIFIED import is later PROMOTED, its Verified By history
+         must still be visible, not hidden just because the status moved on. --}}
+    @if($downtime_matrix_import->verified_at)
         <p><strong>Verified By:</strong> {{ $downtime_matrix_import->verifiedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->verified_at?->format('n/d/Y H:i') }}</p>
     @endif
     @if($downtime_matrix_import->isCancelled())
         <p><strong>Cancelled By:</strong> {{ $downtime_matrix_import->cancelledBy->user_name ?? '-' }} on {{ $downtime_matrix_import->cancelled_at?->format('n/d/Y H:i') }}</p>
+    @endif
+    @if($downtime_matrix_import->promoted_at)
+        <p><strong>Promoted By:</strong> {{ $downtime_matrix_import->promotedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->promoted_at?->format('n/d/Y H:i') }}</p>
     @endif
 </div>
 
@@ -137,7 +144,7 @@
         </div>
         <div class="table-wrapper">
             <table id="dmi-ftf-table" class="display" style="width: 100%;">
-                <thead><tr><th>Origin Farm</th><th>Destination Farm</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th></tr></thead>
+                <thead><tr><th>Origin Farm</th><th>Destination Farm</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th><th>Actions</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -174,7 +181,7 @@
         </div>
         <div class="table-wrapper">
             <table id="dmi-stn-table" class="display" style="width: 100%;">
-                <thead><tr><th>Designated Farm</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th></tr></thead>
+                <thead><tr><th>Designated Farm</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th><th>Actions</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -207,15 +214,65 @@
         </div>
         <div class="table-wrapper">
             <table id="dmi-oth-table" class="display" style="width: 100%;">
-                <thead><tr><th>Origin</th><th>Destination</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th></tr></thead>
+                <thead><tr><th>Origin</th><th>Destination</th><th>Minimum Downtime</th><th>Maximum Downtime</th><th>Status</th><th>Message</th><th>Actions</th></tr></thead>
                 <tbody></tbody>
             </table>
+        </div>
+    </div>
+
+    {{-- Per-row Edit modal, shared by all three tabs. Origin/Destination are
+         populated from $facilities (every active facility - an admin
+         correcting an UNMATCHED/WARNING row may need to pick a facility this
+         import's own raw labels never matched, not just the ones already
+         referenced in this import). The Origin field is hidden for
+         STATIONARY rows, since a Stationary row's origin is always the
+         recognized "Outside" sentinel by construction, not a resolvable
+         facility - saving one never sends an origin_facility_id. --}}
+    <div id="dmi-edit-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="table-wrapper" style="padding: 1.5rem; max-width: 480px; width: 90%;">
+            <h3 style="margin-top: 0;">Edit Row</h3>
+            <p id="dmi-edit-modal-labels" style="color: #666; font-size: 13px;"></p>
+            <form id="dmi-edit-form">
+                <div class="form-group" id="dmi-edit-origin-group">
+                    <label for="dmi-edit-origin">Origin Facility</label>
+                    <select id="dmi-edit-origin">
+                        <option value="">-- Unresolved --</option>
+                        @foreach($facilities as $facility)
+                            <option value="{{ $facility->facility_id }}">{{ $facility->facility_name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="dmi-edit-destination">Destination Facility</label>
+                    <select id="dmi-edit-destination">
+                        <option value="">-- Unresolved --</option>
+                        @foreach($facilities as $facility)
+                            <option value="{{ $facility->facility_id }}">{{ $facility->facility_name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="dmi-edit-minimum">Minimum Downtime</label>
+                    <input type="number" step="0.01" min="0" id="dmi-edit-minimum">
+                </div>
+                <div class="form-group">
+                    <label for="dmi-edit-maximum">Maximum Downtime</label>
+                    <input type="number" step="0.01" min="0" id="dmi-edit-maximum">
+                </div>
+                <p id="dmi-edit-error" style="color: #dc3545; font-size: 13px; display: none;"></p>
+                <div class="form-actions">
+                    <button type="submit" class="btn">Save</button>
+                    <button type="button" class="btn btn-secondary" id="dmi-edit-cancel-btn">Cancel</button>
+                </div>
+            </form>
         </div>
     </div>
 
     <script>
         (function () {
             var endpoint = '{{ route('downtime-matrix-import.rows-data', $downtime_matrix_import) }}';
+            var updateEndpoint = '{{ route('downtime-matrix-import.rows.update', $downtime_matrix_import) }}';
+            var canEdit = {{ $downtime_matrix_import->isPendingVerification() ? 'true' : 'false' }};
             var statusColors = { VALID: '#28a745', WARNING: '#ffc107', UNMATCHED: '#fd7e14', AMBIGUOUS: '#6f42c1', INVALID: '#dc3545' };
             var tabControllers = {};
 
@@ -230,6 +287,13 @@
 
             function renderDowntime(d) {
                 return d !== null ? d : '-';
+            }
+
+            function renderActions(data, type, row) {
+                if (!canEdit) {
+                    return '';
+                }
+                return '<button type="button" class="btn btn-secondary dmi-edit-btn" data-row="' + escapeHtml(JSON.stringify(row)) + '">Edit</button>';
             }
 
             /**
@@ -251,7 +315,7 @@
                 function initTable() {
                     dtInstance = jQuery(cfg.table).DataTable({
                         serverSide: true,
-                        processing: true,
+                        processing: false,
                         searching: false,
                         lengthMenu: [10, 25, 50, 100],
                         pageLength: 25,
@@ -298,6 +362,13 @@
                         if (!dtInstance) {
                             applyFilters();
                         }
+                    },
+                    reload: function () {
+                        if (dtInstance) {
+                            // false = keep the current page/paging position -
+                            // an edit shouldn't bounce the admin back to page 1.
+                            dtInstance.ajax.reload(null, false);
+                        }
                     }
                 };
             }
@@ -326,7 +397,8 @@
                     { data: 'minimum_downtime', render: renderDowntime },
                     { data: 'maximum_downtime', render: renderDowntime },
                     { data: null, render: renderStatus },
-                    { data: 'validation_message', orderable: false, render: renderMessage }
+                    { data: 'validation_message', orderable: false, render: renderMessage },
+                    { data: null, orderable: false, render: renderActions }
                 ]
             });
 
@@ -351,7 +423,8 @@
                     { data: 'minimum_downtime', render: renderDowntime },
                     { data: 'maximum_downtime', render: renderDowntime },
                     { data: null, render: renderStatus },
-                    { data: 'validation_message', orderable: false, render: renderMessage }
+                    { data: 'validation_message', orderable: false, render: renderMessage },
+                    { data: null, orderable: false, render: renderActions }
                 ]
             });
 
@@ -377,7 +450,8 @@
                     { data: 'minimum_downtime', render: renderDowntime },
                     { data: 'maximum_downtime', render: renderDowntime },
                     { data: null, render: renderStatus },
-                    { data: 'validation_message', orderable: false, render: renderMessage }
+                    { data: 'validation_message', orderable: false, render: renderMessage },
+                    { data: null, orderable: false, render: renderActions }
                 ]
             });
 
@@ -396,6 +470,104 @@
                     tabControllers.OTHERS.ensureLoaded();
                 }
             };
+
+            /**
+             * Per-row Edit modal. Opened from any of the three tabs' Edit
+             * button (renderActions embeds the full row payload - including
+             * the raw origin_facility_id/destination_facility_id/rule_type
+             * fields DowntimeMatrixImportController::rowPayload() now
+             * returns specifically for this - as a data-row attribute, so
+             * no extra request is needed to populate the form). Saving PUTs
+             * a single-row payload to the same rows.update endpoint the old
+             * page-based bulk editor used, then reloads only the tab the
+             * edited row belongs to, on its current page, so the change is
+             * visibly applied without losing the admin's place.
+             */
+            var editModal = jQuery('#dmi-edit-modal');
+            var editForm = jQuery('#dmi-edit-form');
+            var editError = jQuery('#dmi-edit-error');
+            var currentEditRowId = null;
+            var currentEditRuleType = null;
+
+            function openEditModal(row) {
+                currentEditRowId = row.import_row_id;
+                currentEditRuleType = row.rule_type;
+
+                var labels = 'Destination: ' + (row.destination_raw_label || '-');
+                if (row.rule_type !== 'STATIONARY') {
+                    labels = 'Origin: ' + (row.origin_raw_label || '-') + ' | ' + labels;
+                }
+                jQuery('#dmi-edit-modal-labels').text(labels);
+
+                jQuery('#dmi-edit-origin').val(row.origin_facility_id || '');
+                jQuery('#dmi-edit-destination').val(row.destination_facility_id || '');
+                jQuery('#dmi-edit-minimum').val(row.minimum_downtime !== null && row.minimum_downtime !== undefined ? row.minimum_downtime : '');
+                jQuery('#dmi-edit-maximum').val(row.maximum_downtime !== null && row.maximum_downtime !== undefined ? row.maximum_downtime : '');
+                editError.hide().text('');
+
+                // STATIONARY rows have no real origin to pick - "Outside" is
+                // the recognized sentinel origin by construction, not a
+                // resolvable facility (see RuleClassifier) - so the field is
+                // hidden rather than shown-but-meaningless.
+                jQuery('#dmi-edit-origin-group').toggle(row.rule_type !== 'STATIONARY');
+
+                editModal.css('display', 'flex');
+            }
+
+            function closeEditModal() {
+                editModal.css('display', 'none');
+                currentEditRowId = null;
+                currentEditRuleType = null;
+            }
+
+            jQuery(document).on('click', '.dmi-edit-btn', function () {
+                openEditModal(JSON.parse(jQuery(this).attr('data-row')));
+            });
+
+            jQuery('#dmi-edit-cancel-btn').on('click', closeEditModal);
+
+            editForm.on('submit', function (e) {
+                e.preventDefault();
+
+                if (currentEditRowId === null) {
+                    return;
+                }
+
+                var minimumVal = jQuery('#dmi-edit-minimum').val();
+                var maximumVal = jQuery('#dmi-edit-maximum').val();
+                var rowPayload = {
+                    origin_facility_id: currentEditRuleType === 'STATIONARY' ? null : (jQuery('#dmi-edit-origin').val() || null),
+                    destination_facility_id: jQuery('#dmi-edit-destination').val() || null,
+                    minimum_downtime: minimumVal !== '' ? minimumVal : null,
+                    maximum_downtime: maximumVal !== '' ? maximumVal : null
+                };
+                var payload = { rows: {} };
+                payload.rows[currentEditRowId] = rowPayload;
+
+                var reloadRuleType = currentEditRuleType;
+
+                jQuery.ajax({
+                    url: updateEndpoint,
+                    method: 'PUT',
+                    data: payload,
+                    headers: {
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                    }
+                }).done(function () {
+                    closeEditModal();
+                    if (tabControllers[reloadRuleType]) {
+                        tabControllers[reloadRuleType].reload();
+                    }
+                }).fail(function (xhr) {
+                    var message = 'Unable to save changes.';
+                    if (xhr.responseJSON && xhr.responseJSON.errors) {
+                        message = Object.values(xhr.responseJSON.errors).flat().join(' ');
+                    } else if (xhr.responseJSON && xhr.responseJSON.message) {
+                        message = xhr.responseJSON.message;
+                    }
+                    editError.text(message).show();
+                });
+            });
         })();
     </script>
 @endif
@@ -410,5 +582,28 @@
             @csrf
             <button type="submit" class="btn btn-danger">Cancel</button>
         </form>
+    </div>
+@elseif($promotionMode ?? false)
+    {{-- The confirmation step reached from the import list's "Production"
+         action (visible only for VERIFIED rows). This page IS the
+         confirmation - no extra JS confirm() popup - so the admin can
+         review the same staged rows/tabs above one more time before
+         choosing. Save to Production only flips downtime_matrix_imports.status
+         to PROMOTED; it does not map or write anything into
+         downtime_matrix/downtime_stationary yet - that promotion-target
+         mapping is a separate, not-yet-built phase. Cancel here is a plain
+         link back to the read-only Preview, not a state change - it must
+         never be confused with the PENDING_VERIFICATION "Cancel" above,
+         which actually cancels the import. --}}
+    <div class="table-wrapper" style="padding: 1.5rem; margin-top: 1.5rem; border-left: 4px solid #6f42c1;">
+        <p style="margin-top: 0;"><strong>Confirm Production Promotion</strong></p>
+        <p style="color: #666; font-size: 13px;">Review the staged rows above, then choose Save to Production to mark this import as promoted, or Cancel to go back without making any change. This step does not write any rows into the production Downtime Matrix / Downtime Stationary tables yet - that mapping will be implemented in a later phase.</p>
+        <div class="form-actions">
+            <form method="POST" action="{{ route('downtime-matrix-import.promote', $downtime_matrix_import) }}" class="ajax-form" style="display: inline;">
+                @csrf
+                <button type="submit" class="btn">Save to Production</button>
+            </form>
+            <a href="{{ route('downtime-matrix-import.show', $downtime_matrix_import) }}" class="btn btn-secondary ajax-link">Cancel</a>
+        </div>
     </div>
 @endif

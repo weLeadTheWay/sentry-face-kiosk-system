@@ -2,13 +2,24 @@
 
 namespace App\Models;
 
+use App\Traits\Auditable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Auditable is included deliberately, but has no effect on the bulk
+ * machine-parsed insert: DowntimeMatrixImportService::persistRows() writes
+ * via the query builder's insert(), which bypasses Eloquent model events
+ * entirely, so the original parse never generates audit_logs rows (avoiding
+ * the volume concern that excluded this model from Auditable originally).
+ * A row edited later via ->update() (see updateRows()) DOES fire the
+ * 'updated' event, so only genuine human corrections are ever audited -
+ * exactly the compliance-relevant subset.
+ */
 class DowntimeMatrixImportRow extends Model
 {
-    use HasFactory;
+    use HasFactory, Auditable;
 
     protected $table = 'downtime_matrix_import_rows';
     protected $primaryKey = 'import_row_id';
@@ -36,6 +47,8 @@ class DowntimeMatrixImportRow extends Model
         'resolution_status',
         'validation_message',
         'page_number',
+        'edited_by',
+        'edited_at',
     ];
 
     protected function casts(): array
@@ -49,6 +62,7 @@ class DowntimeMatrixImportRow extends Model
             'clean_dormitory_hours' => 'decimal:2',
             'restricted_downtime_area_hours' => 'decimal:2',
             'restricted_dormitory_hours' => 'decimal:2',
+            'edited_at' => 'datetime',
         ];
     }
 
@@ -67,8 +81,18 @@ class DowntimeMatrixImportRow extends Model
         return $this->belongsTo(FacilityList::class, 'destination_facility_id', 'facility_id');
     }
 
+    public function editedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'edited_by', 'user_id');
+    }
+
     public function isFacilityGroup(): bool
     {
         return $this->origin_facility_group_category !== null || $this->destination_facility_group_category !== null;
+    }
+
+    public function wasManuallyEdited(): bool
+    {
+        return $this->edited_by !== null;
     }
 }

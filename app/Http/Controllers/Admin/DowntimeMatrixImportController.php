@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Admin\Concerns\HandlesDataTablesRequest;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreDowntimeMatrixImportRequest;
+use App\Http\Requests\Admin\UpdateDowntimeMatrixImportRowsRequest;
 use App\Models\DowntimeMatrixImport;
 use App\Models\DowntimeMatrixImportRow;
+use App\Models\FacilityList;
 use App\Services\DowntimeMatrixImport\DowntimeMatrixImportService;
 use App\Services\DowntimeMatrixImport\FacilityImportResolver;
 use Illuminate\Http\JsonResponse;
@@ -124,6 +126,75 @@ class DowntimeMatrixImportController extends Controller
     }
 
     /**
+     * The confirmation step for promoting a VERIFIED import - reachable via
+     * the "Production" action on the import list (visible only for VERIFIED
+     * rows). Reuses the same Preview view as show(), just with
+     * $promotionMode=true so its bottom action block renders "Save to
+     * Production"/"Cancel" instead of nothing - this lets an admin review
+     * the exact same staged rows one more time before confirming. Falls
+     * back to a plain (non-promotion-mode) Preview if the import isn't
+     * actually VERIFIED (e.g. a stale link, or it was already promoted),
+     * mirroring how verify()/cancel() already fall back for a status that's
+     * no longer actionable.
+     */
+    public function promoteConfirm(DowntimeMatrixImport $downtime_matrix_import)
+    {
+        if (!$downtime_matrix_import->isVerified()) {
+            return $this->showResponse($downtime_matrix_import);
+        }
+
+        return $this->showResponse($downtime_matrix_import, promotionMode: true);
+    }
+
+    /**
+     * Marks the import PROMOTED. This is a status-only transition, same
+     * shape as verify()/cancel() - it does NOT map or write any staged row
+     * into downtime_matrix/downtime_stationary. That promotion-target
+     * mapping is explicitly out of scope for this phase; this action only
+     * records that an admin confirmed the import at the review step above.
+     */
+    public function promote(DowntimeMatrixImport $downtime_matrix_import)
+    {
+        if ($downtime_matrix_import->isVerified()) {
+            $this->service->promote($downtime_matrix_import, auth()->user());
+        }
+
+        return $this->showResponse($downtime_matrix_import->fresh());
+    }
+
+    /**
+     * Saves a manual correction from the Preview page's per-row "Edit"
+     * modal - lets an admin fix a row flagged WARNING/UNMATCHED/AMBIGUOUS/
+     * INVALID (the resolved Origin/Destination facility and/or the
+     * downtime hours) instead of only being able to correct the source
+     * PDF and re-upload. The request shape (rows: {id: {...}}) supports
+     * more than one row per call, but the modal only ever sends one - a
+     * no-op (not an error) once the import is no longer
+     * PENDING_VERIFICATION, since editing a decision that's already been
+     * made doesn't make sense; the JSON response's (unchanged) row data
+     * lets the modal detect that and inform the admin rather than
+     * silently appearing to have saved.
+     */
+    public function updateRows(UpdateDowntimeMatrixImportRowsRequest $request, DowntimeMatrixImport $downtime_matrix_import): JsonResponse
+    {
+        $applied = $downtime_matrix_import->isPendingVerification();
+
+        if ($applied) {
+            $this->service->updateRows($downtime_matrix_import, $request->validated()['rows'], auth()->user());
+        }
+
+        $rowIds = array_keys($request->validated()['rows']);
+        $groupDisplayCache = [];
+        $rows = DowntimeMatrixImportRow::where('import_id', $downtime_matrix_import->import_id)
+            ->whereIn('import_row_id', $rowIds)
+            ->with(['originFacility:facility_id,facility_name', 'destinationFacility:facility_id,facility_name'])
+            ->get()
+            ->map(fn (DowntimeMatrixImportRow $row) => $this->rowPayload($row, $groupDisplayCache));
+
+        return response()->json(['applied' => $applied, 'rows' => $rows->values()]);
+    }
+
+    /**
      * jQuery DataTables server-side processing endpoint for one import's
      * staged rows, scoped by rule_type (one of the three Preview tabs) plus
      * the Status/Search filters. This is a sibling to data() above, not a
@@ -203,19 +274,38 @@ class DowntimeMatrixImportController extends Controller
             'draw' => $this->dtDraw(),
             'recordsTotal' => $recordsTotal,
             'recordsFiltered' => $recordsFiltered,
-            'data' => $rows->map(fn (DowntimeMatrixImportRow $row) => [
-                'import_row_id' => $row->import_row_id,
-                'origin_display' => $this->sideDisplay($row, 'origin', $groupDisplayCache),
-                'destination_display' => $this->sideDisplay($row, 'destination', $groupDisplayCache),
-                'minimum_downtime' => $row->minimum_downtime !== null ? (float) $row->minimum_downtime : null,
-                'maximum_downtime' => $row->maximum_downtime !== null ? (float) $row->maximum_downtime : null,
-                'resolution_status' => $row->resolution_status,
-                'validation_message' => $row->validation_message,
-            ])->all(),
+            'data' => $rows->map(fn (DowntimeMatrixImportRow $row) => $this->rowPayload($row, $groupDisplayCache))->all(),
         ]);
     }
 
-    private function showResponse(DowntimeMatrixImport $downtime_matrix_import)
+    /**
+     * The JSON shape sent for one staged row - used both by the DataTables
+     * rows-data endpoint (rendering the Preview's tables) and by
+     * updateRows() (reporting back what a save actually resulted in). The
+     * *_display fields are pre-formatted for read-only display; the raw
+     * *_facility_id/*_raw_label/rule_type fields are what the per-row Edit
+     * modal needs to pre-fill its form with the row's actual editable
+     * state, not just its rendered text.
+     */
+    private function rowPayload(DowntimeMatrixImportRow $row, array &$groupDisplayCache): array
+    {
+        return [
+            'import_row_id' => $row->import_row_id,
+            'rule_type' => $row->rule_type,
+            'origin_raw_label' => $row->origin_raw_label,
+            'destination_raw_label' => $row->destination_raw_label,
+            'origin_facility_id' => $row->origin_facility_id,
+            'destination_facility_id' => $row->destination_facility_id,
+            'origin_display' => $this->sideDisplay($row, 'origin', $groupDisplayCache),
+            'destination_display' => $this->sideDisplay($row, 'destination', $groupDisplayCache),
+            'minimum_downtime' => $row->minimum_downtime !== null ? (float) $row->minimum_downtime : null,
+            'maximum_downtime' => $row->maximum_downtime !== null ? (float) $row->maximum_downtime : null,
+            'resolution_status' => $row->resolution_status,
+            'validation_message' => $row->validation_message,
+        ];
+    }
+
+    private function showResponse(DowntimeMatrixImport $downtime_matrix_import, bool $promotionMode = false)
     {
         $downtime_matrix_import->load(['uploadedBy', 'verifiedBy', 'cancelledBy']);
 
@@ -227,6 +317,12 @@ class DowntimeMatrixImportController extends Controller
         $farmToFarmOrigins = collect();
         $farmToFarmDestinations = collect();
         $stationaryDestinations = collect();
+
+        // For the per-row Edit modal's Origin/Destination dropdowns - every
+        // active facility, not just ones referenced by this import (unlike
+        // the filter dropdowns below), since an admin correcting a row may
+        // need to pick a facility this import's own labels never matched.
+        $facilities = FacilityList::where('is_active', true)->orderBy('facility_name')->get(['facility_id', 'facility_name']);
 
         if (!$downtime_matrix_import->hasParseError()) {
             // A single GROUP BY aggregate, not a load-every-row-and-tally in
@@ -276,7 +372,7 @@ class DowntimeMatrixImportController extends Controller
 
         return $this->view(
             'admin.downtime-matrix-import._show',
-            compact('downtime_matrix_import', 'categorySummary', 'farmToFarmOrigins', 'farmToFarmDestinations', 'stationaryDestinations'),
+            compact('downtime_matrix_import', 'categorySummary', 'farmToFarmOrigins', 'farmToFarmDestinations', 'stationaryDestinations', 'facilities', 'promotionMode'),
             'admin.downtime-matrix-import.show'
         );
     }
