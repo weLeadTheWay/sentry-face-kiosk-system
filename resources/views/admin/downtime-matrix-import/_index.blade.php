@@ -10,7 +10,7 @@
                 <option value="PENDING_VERIFICATION">Pending Verification</option>
                 <option value="VERIFIED">Verified</option>
                 <option value="CANCELLED">Cancelled</option>
-                <option value="PROMOTED">Promoted</option>
+                <option value="PRODUCED">Produced</option>
             </select>
         </div>
         <div class="form-group" style="margin-bottom: 0; min-width: 180px;">
@@ -55,7 +55,7 @@
         var endpoint = '{{ route('downtime-matrix-import.data') }}';
         var dtInstance = null;
         var appliedFilters = {};
-        var statusColors = { VERIFIED: '#28a745', CANCELLED: '#6c757d', PROMOTED: '#6f42c1' };
+        var statusColors = { VERIFIED: '#28a745', CANCELLED: '#6c757d', PRODUCED: '#6f42c1' };
 
         function renderStatus(data, type, row) {
             var color = statusColors[row.status] || '#ffc107';
@@ -66,12 +66,12 @@
             var html = '<a href="' + basePath + '/' + row.import_id + '" class="btn ajax-link" style="background: #17a2b8; font-size: 12px;">View</a>';
 
             // Production is only ever offered from VERIFIED - it's the
-            // launch point for the promote confirmation step, so it must
-            // never appear while still PENDING_VERIFICATION (nothing to
-            // promote yet), nor once already PROMOTED/CANCELLED (nothing
-            // left to confirm).
+            // launch point for the Save to Production confirmation step, so
+            // it must never appear while still PENDING_VERIFICATION
+            // (nothing verified yet to produce), nor once already
+            // PRODUCED/CANCELLED (nothing left to confirm).
             if (row.status === 'VERIFIED') {
-                html += ' <a href="' + basePath + '/' + row.import_id + '/promote" class="btn ajax-link" style="background: #6f42c1; font-size: 12px;">Production</a>';
+                html += ' <a href="' + basePath + '/' + row.import_id + '/produce" class="btn ajax-link" style="background: #6f42c1; font-size: 12px;">Production</a>';
             }
 
             return html;

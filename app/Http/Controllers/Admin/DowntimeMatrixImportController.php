@@ -126,40 +126,46 @@ class DowntimeMatrixImportController extends Controller
     }
 
     /**
-     * The confirmation step for promoting a VERIFIED import - reachable via
-     * the "Production" action on the import list (visible only for VERIFIED
-     * rows). Reuses the same Preview view as show(), just with
-     * $promotionMode=true so its bottom action block renders "Save to
+     * The confirmation step for producing (mapping to production) a
+     * VERIFIED import - reachable via the "Production" action on the
+     * import list (visible only for VERIFIED rows). Reuses the same
+     * Preview view as show(), just with $productionMode=true so its
+     * bottom action block renders the confirmation summary plus "Save to
      * Production"/"Cancel" instead of nothing - this lets an admin review
      * the exact same staged rows one more time before confirming. Falls
-     * back to a plain (non-promotion-mode) Preview if the import isn't
-     * actually VERIFIED (e.g. a stale link, or it was already promoted),
+     * back to a plain (non-confirmation) Preview if the import isn't
+     * actually VERIFIED (e.g. a stale link, or it was already produced),
      * mirroring how verify()/cancel() already fall back for a status that's
      * no longer actionable.
      */
-    public function promoteConfirm(DowntimeMatrixImport $downtime_matrix_import)
+    public function produceConfirm(DowntimeMatrixImport $downtime_matrix_import)
     {
         if (!$downtime_matrix_import->isVerified()) {
             return $this->showResponse($downtime_matrix_import);
         }
 
-        return $this->showResponse($downtime_matrix_import, promotionMode: true);
+        return $this->showResponse($downtime_matrix_import, productionMode: true);
     }
 
     /**
-     * Marks the import PROMOTED. This is a status-only transition, same
-     * shape as verify()/cancel() - it does NOT map or write any staged row
-     * into downtime_matrix/downtime_stationary. That promotion-target
-     * mapping is explicitly out of scope for this phase; this action only
-     * records that an admin confirmed the import at the review step above.
+     * Maps a VERIFIED import's eligible (VALID/WARNING) staging rows into
+     * downtime_matrix/downtime_stationary and marks the import PRODUCED -
+     * see DowntimeMatrixImportService::produce() for the actual mapping
+     * rules and its transactional/rollback behavior. A no-op (falls back to
+     * the plain Preview, no result panel) if the import isn't VERIFIED.
+     * Either way the response is the same Preview page; on a genuine
+     * production attempt (success or failure) it additionally carries
+     * $productionResult so the page can show what happened.
      */
-    public function promote(DowntimeMatrixImport $downtime_matrix_import)
+    public function produce(DowntimeMatrixImport $downtime_matrix_import)
     {
+        $productionResult = null;
+
         if ($downtime_matrix_import->isVerified()) {
-            $this->service->promote($downtime_matrix_import, auth()->user());
+            $productionResult = $this->service->produce($downtime_matrix_import, auth()->user());
         }
 
-        return $this->showResponse($downtime_matrix_import->fresh());
+        return $this->showResponse($downtime_matrix_import->fresh(), productionResult: $productionResult);
     }
 
     /**
@@ -305,7 +311,7 @@ class DowntimeMatrixImportController extends Controller
         ];
     }
 
-    private function showResponse(DowntimeMatrixImport $downtime_matrix_import, bool $promotionMode = false)
+    private function showResponse(DowntimeMatrixImport $downtime_matrix_import, bool $productionMode = false, ?array $productionResult = null)
     {
         $downtime_matrix_import->load(['uploadedBy', 'verifiedBy', 'cancelledBy']);
 
@@ -372,7 +378,7 @@ class DowntimeMatrixImportController extends Controller
 
         return $this->view(
             'admin.downtime-matrix-import._show',
-            compact('downtime_matrix_import', 'categorySummary', 'farmToFarmOrigins', 'farmToFarmDestinations', 'stationaryDestinations', 'facilities', 'promotionMode'),
+            compact('downtime_matrix_import', 'categorySummary', 'farmToFarmOrigins', 'farmToFarmDestinations', 'stationaryDestinations', 'facilities', 'productionMode', 'productionResult'),
             'admin.downtime-matrix-import.show'
         );
     }

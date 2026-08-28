@@ -33,8 +33,8 @@ class DowntimeMatrixImport extends Model
         'verified_at',
         'cancelled_by',
         'cancelled_at',
-        'promoted_by',
-        'promoted_at',
+        'produced_by',
+        'produced_at',
     ];
 
     protected function casts(): array
@@ -42,7 +42,7 @@ class DowntimeMatrixImport extends Model
         return [
             'verified_at' => 'datetime',
             'cancelled_at' => 'datetime',
-            'promoted_at' => 'datetime',
+            'produced_at' => 'datetime',
         ];
     }
 
@@ -66,9 +66,9 @@ class DowntimeMatrixImport extends Model
         return $this->belongsTo(User::class, 'cancelled_by', 'user_id');
     }
 
-    public function promotedBy(): BelongsTo
+    public function producedBy(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'promoted_by', 'user_id');
+        return $this->belongsTo(User::class, 'produced_by', 'user_id');
     }
 
     public function isPendingVerification(): bool
@@ -86,9 +86,9 @@ class DowntimeMatrixImport extends Model
         return $this->status === 'CANCELLED';
     }
 
-    public function isPromoted(): bool
+    public function isProduced(): bool
     {
-        return $this->status === 'PROMOTED';
+        return $this->status === 'PRODUCED';
     }
 
     public function hasParseError(): bool

@@ -10,6 +10,7 @@ use App\Models\FacilityList;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\DowntimeMatrixImport\FacilityImportResolver;
 use Database\Seeders\FacilityCategorySeeder;
 use Database\Seeders\FacilityListSeeder;
 use Database\Seeders\FacilityTypeSeeder;
@@ -375,7 +376,63 @@ class DowntimeMatrixImportAdminTest extends TestCase
         $this->assertSame($preExistingStationaryCount, DowntimeStationary::count(), 'downtime_stationary must never be written to by the import pipeline, even after Verify.');
     }
 
-    // --- Production promotion (confirmation step, status-only) -------------
+    // --- Production mapping (confirmation step + real downtime_matrix/downtime_stationary writes) ---
+
+    /**
+     * Independently re-derives how many downtime_matrix/downtime_stationary
+     * rows the service *should* create for $import's current staging rows,
+     * by walking the same VALID/WARNING-only, group-expanding rules
+     * DowntimeMatrixImportService::produce() applies - but as its own
+     * separate calculation (not by calling the service's private methods),
+     * so it's a genuine check rather than restating the implementation.
+     *
+     * @return array{matrix: int, stationary: int}
+     */
+    private function expectedProductionCounts(DowntimeMatrixImport $import): array
+    {
+        $dcFacilityIds = FacilityList::whereHas('facilityCategory', fn ($q) => $q->where('facility_category_name', 'DC_WAREHOUSE'))
+            ->where('is_active', true)
+            ->pluck('facility_id')
+            ->all();
+
+        $expandSide = function (DowntimeMatrixImportRow $row, string $side) use ($dcFacilityIds) {
+            $facilityId = $row->{$side . '_facility_id'};
+            if ($facilityId !== null) {
+                return [$facilityId];
+            }
+
+            if ($row->{$side . '_facility_group_category'} === 'DC_WAREHOUSE') {
+                return $dcFacilityIds;
+            }
+
+            return [];
+        };
+
+        $matrixCount = 0;
+        $import->rows()->whereIn('resolution_status', ['VALID', 'WARNING'])->where('rule_type', 'FARM_TO_FARM')->get()
+            ->each(function (DowntimeMatrixImportRow $row) use (&$matrixCount, $expandSide) {
+                $origins = $expandSide($row, 'origin');
+                $destinations = $expandSide($row, 'destination');
+                if (empty($origins) || empty($destinations)) {
+                    return;
+                }
+                foreach ($origins as $originId) {
+                    foreach ($destinations as $destinationId) {
+                        if ($originId !== $destinationId) {
+                            $matrixCount++;
+                        }
+                    }
+                }
+            });
+
+        $stationaryCount = $import->rows()
+            ->whereIn('resolution_status', ['VALID', 'WARNING'])
+            ->where('rule_type', 'STATIONARY')
+            ->whereNotNull('destination_facility_id')
+            ->count();
+
+        return ['matrix' => $matrixCount, 'stationary' => $stationaryCount];
+    }
 
     public function test_index_page_renders_the_conditional_production_action(): void
     {
@@ -389,78 +446,135 @@ class DowntimeMatrixImportAdminTest extends TestCase
         // no server-rendered per-row HTML to assert on directly (same as
         // every other action button in this Data Table), so this locks in
         // that the gating condition and the button text are actually
-        // present in the served page.
+        // present in the served page. It must never be offered for
+        // PENDING_VERIFICATION, CANCELLED, or PRODUCED - all three are
+        // excluded by construction since the check is an exact equality
+        // against 'VERIFIED', not a blocklist.
         $response->assertSee("row.status === 'VERIFIED'", false);
         $response->assertSee('Production', false);
     }
 
-    public function test_promote_confirm_falls_back_to_plain_preview_unless_verified(): void
+    public function test_produce_confirm_falls_back_to_plain_preview_unless_verified(): void
     {
         $this->upload();
         $import = DowntimeMatrixImport::sole();
         $this->assertSame('PENDING_VERIFICATION', $import->status);
 
-        $response = $this->ajaxGet(route('downtime-matrix-import.promote.confirm', $import));
+        $response = $this->ajaxGet(route('downtime-matrix-import.produce.confirm', $import));
 
         $response->assertOk();
-        $response->assertDontSee('Confirm Production Promotion');
+        $response->assertDontSee('Confirm Save to Production');
         $response->assertDontSee('Save to Production');
     }
 
-    public function test_promote_confirm_shows_the_confirmation_step_when_verified(): void
+    public function test_produce_confirm_shows_the_confirmation_step_when_verified(): void
     {
-        $this->upload();
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
         $import = DowntimeMatrixImport::sole();
         $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
 
-        $response = $this->ajaxGet(route('downtime-matrix-import.promote.confirm', $import));
+        $response = $this->ajaxGet(route('downtime-matrix-import.produce.confirm', $import));
 
         $response->assertOk();
-        $response->assertSee('Confirm Production Promotion');
+        $response->assertSee('Confirm Save to Production');
         $response->assertSee('Save to Production');
+        $response->assertSee($import->original_filename);
+        $response->assertSee('Total Rows Parsed');
+        $response->assertSee('Rows to be Mapped');
+        $response->assertSee('Rows to be Skipped');
+        $response->assertSee((string) ($import->valid_rows_count + $import->warning_rows_count));
+        $response->assertSee((string) ($import->unmatched_rows_count + $import->ambiguous_rows_count + $import->invalid_rows_count));
         // The confirmation step is a review of the same Preview, not a
         // separate summary - its three Data Table tabs must still be there.
         $response->assertSee('id="dmi-ftf-table"', false);
     }
 
-    public function test_promote_marks_the_import_promoted_and_writes_nothing_to_production_tables(): void
+    public function test_show_page_offers_a_production_shortcut_once_verified(): void
     {
-        $this->seedRealFacilityData();
-        $preExistingMatrixCount = DowntimeMatrix::count();
-        $preExistingStationaryCount = DowntimeStationary::count();
-
-        $this->upload()->assertOk();
+        $this->upload();
         $import = DowntimeMatrixImport::sole();
-        $rowCountBefore = $import->rows()->count();
+
+        // Not yet verified - no shortcut to a step that isn't reachable yet.
+        $this->ajaxGet(route('downtime-matrix-import.show', $import))
+            ->assertOk()
+            ->assertDontSee('href="' . route('downtime-matrix-import.produce.confirm', $import) . '"', false);
+
         $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
-        $editor = auth()->user();
 
-        $this->ajaxPost(route('downtime-matrix-import.promote', $import))->assertOk();
+        // The response to Verify itself, and a plain revisit of the same
+        // Preview afterward, must both offer the shortcut - an admin
+        // shouldn't have to navigate back to the import list just to find
+        // the Production action for an import they're already looking at.
+        $verifyResponse = $this->ajaxPost(route('downtime-matrix-import.verify', $import));
+        $verifyResponse->assertOk();
+        $verifyResponse->assertSee('href="' . route('downtime-matrix-import.produce.confirm', $import) . '"', false);
 
-        $import->refresh();
-        $this->assertSame('PROMOTED', $import->status);
-        $this->assertSame($editor->user_id, $import->promoted_by);
-        $this->assertNotNull($import->promoted_at);
-        $this->assertSame($rowCountBefore, $import->rows()->count(), 'Promoting must never add/remove/alter staged rows.');
-        $this->assertSame($preExistingMatrixCount, DowntimeMatrix::count(), 'downtime_matrix must never be written to by promotion in this phase.');
-        $this->assertSame($preExistingStationaryCount, DowntimeStationary::count(), 'downtime_stationary must never be written to by promotion in this phase.');
+        $this->ajaxGet(route('downtime-matrix-import.show', $import))
+            ->assertOk()
+            ->assertSee('href="' . route('downtime-matrix-import.produce.confirm', $import) . '"', false);
+
+        // The shortcut only ever links to the confirmation step, never
+        // straight to produce() - Save to Production must still always
+        // require that explicit confirmation.
+        $this->ajaxGet(route('downtime-matrix-import.show', $import))
+            ->assertDontSee('action="' . route('downtime-matrix-import.produce', $import) . '"', false);
     }
 
-    public function test_promote_is_a_no_op_unless_verified(): void
+    public function test_production_shortcut_is_absent_once_cancelled_or_produced(): void
     {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $cancelled = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.cancel', $cancelled))->assertOk();
+
+        $this->ajaxGet(route('downtime-matrix-import.show', $cancelled))
+            ->assertOk()
+            ->assertDontSee('href="' . route('downtime-matrix-import.produce.confirm', $cancelled) . '"', false);
+
+        $this->upload()->assertOk();
+        $produced = DowntimeMatrixImport::where('import_id', '!=', $cancelled->import_id)->sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $produced))->assertOk();
+        $this->ajaxPost(route('downtime-matrix-import.produce', $produced))->assertOk();
+
+        $this->ajaxGet(route('downtime-matrix-import.show', $produced))
+            ->assertOk()
+            ->assertDontSee('href="' . route('downtime-matrix-import.produce.confirm', $produced) . '"', false);
+    }
+
+    public function test_viewing_the_confirmation_step_makes_no_database_changes(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxGet(route('downtime-matrix-import.produce.confirm', $import))->assertOk();
+
+        $import->refresh();
+        $this->assertSame('VERIFIED', $import->status, 'Merely viewing the confirmation step - i.e. not yet confirming - must not change status.');
+        $this->assertSame(0, DowntimeMatrix::count());
+        $this->assertSame(0, DowntimeStationary::count());
+    }
+
+    public function test_produce_is_a_no_op_unless_verified(): void
+    {
+        $this->seedRealFacilityData();
         $this->upload();
         $import = DowntimeMatrixImport::sole();
         $this->assertSame('PENDING_VERIFICATION', $import->status);
 
-        $this->ajaxPost(route('downtime-matrix-import.promote', $import))->assertOk();
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
 
         $import->refresh();
-        $this->assertSame('PENDING_VERIFICATION', $import->status, 'Promoting a non-VERIFIED import must be a no-op.');
-        $this->assertNull($import->promoted_by);
-        $this->assertNull($import->promoted_at);
+        $this->assertSame('PENDING_VERIFICATION', $import->status, 'Producing a non-VERIFIED import must be a no-op.');
+        $this->assertNull($import->produced_by);
+        $this->assertNull($import->produced_at);
+        $this->assertSame(0, DowntimeMatrix::count());
+        $this->assertSame(0, DowntimeStationary::count());
     }
 
-    public function test_promote_requires_permission(): void
+    public function test_produce_requires_permission(): void
     {
         $this->upload();
         $import = DowntimeMatrixImport::sole();
@@ -475,8 +589,361 @@ class DowntimeMatrixImportAdminTest extends TestCase
             'is_active' => true,
         ]));
 
-        $this->get(route('downtime-matrix-import.promote.confirm', $import))->assertForbidden();
-        $this->post(route('downtime-matrix-import.promote', $import))->assertForbidden();
+        $this->get(route('downtime-matrix-import.produce.confirm', $import))->assertForbidden();
+        $this->post(route('downtime-matrix-import.produce', $import))->assertForbidden();
+    }
+
+    public function test_produce_maps_eligible_rows_and_marks_the_import_produced(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+        $producer = auth()->user();
+        $expected = $this->expectedProductionCounts($import);
+        // The real fixture resolves every Farm-to-Farm/Stationary cell via
+        // NORMALIZED_NAME (WARNING) rather than an exact match (see
+        // test_upload_parses_real_sample_pdf_...), so this import has real
+        // WARNING rows to map - not a contrived scenario.
+        $this->assertGreaterThan(0, $expected['matrix'] + $expected['stationary']);
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $import));
+
+        $response->assertOk();
+        $response->assertSee('Production mapping completed.');
+        $import->refresh();
+        $this->assertSame('PRODUCED', $import->status);
+        $this->assertSame($producer->user_id, $import->produced_by);
+        $this->assertNotNull($import->produced_at);
+        $this->assertSame($expected['matrix'], DowntimeMatrix::where('is_active', true)->count());
+        $this->assertSame($expected['stationary'], DowntimeStationary::where('is_active', true)->count());
+        // "records created" can exceed "rows processed" once a LEP, DC
+        // group row expands - assert that's actually true for this real
+        // fixture, not just possible in theory.
+        $stagingRowsProcessed = $import->valid_rows_count + $import->warning_rows_count;
+        $this->assertGreaterThan($stagingRowsProcessed, $expected['matrix'] + $expected['stationary'], 'LEP, DC group expansion should make production records outnumber staging rows for this fixture.');
+    }
+
+    public function test_produce_does_not_modify_staging_rows_or_the_original_pdf(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+        $storedPath = $import->stored_file_path;
+        $rowsBefore = $import->rows()->orderBy('import_row_id')->get(['import_row_id', 'resolution_status', 'origin_facility_id', 'destination_facility_id', 'minimum_downtime', 'maximum_downtime'])->toArray();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $import->refresh();
+        $this->assertSame($storedPath, $import->stored_file_path, 'The original uploaded PDF path must never change.');
+        Storage::disk('public')->assertExists($storedPath);
+        $rowsAfter = $import->rows()->orderBy('import_row_id')->get(['import_row_id', 'resolution_status', 'origin_facility_id', 'destination_facility_id', 'minimum_downtime', 'maximum_downtime'])->toArray();
+        $this->assertEquals($rowsBefore, $rowsAfter, 'Producing must never modify downtime_matrix_import_rows.');
+    }
+
+    public function test_produce_skips_unmatched_rows(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        // Organikultura Area / Fabrication (16 rows total) are UNMATCHED in
+        // the real fixture - confirmed by
+        // test_non_sentinel_non_farm_origins_land_in_others_and_are_never_silently_dropped.
+        $this->assertSame(16, $import->unmatched_rows_count);
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $import));
+
+        $response->assertOk();
+        $import->refresh();
+        $this->assertSame(16, $import->unmatched_rows_count, 'Skipped rows are never touched - the denormalized count must be unchanged.');
+        // 16 UNMATCHED rows can only have contributed 0 production records -
+        // confirmed generally via expectedProductionCounts() excluding them
+        // (it only ever queries VALID/WARNING rows).
+        $expected = $this->expectedProductionCounts($import);
+        $this->assertSame($expected['matrix'], DowntimeMatrix::count());
+        $this->assertSame($expected['stationary'], DowntimeStationary::count());
+    }
+
+    public function test_produce_skips_ambiguous_rows(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+
+        $row = $import->rows()->where('rule_type', 'FARM_TO_FARM')->whereIn('resolution_status', ['VALID', 'WARNING'])->firstOrFail();
+        $row->update(['resolution_status' => 'AMBIGUOUS']);
+        $import->refresh();
+        $expected = $this->expectedProductionCounts($import);
+
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $this->assertSame($expected['matrix'], DowntimeMatrix::count(), 'The row forced to AMBIGUOUS must not have contributed a production record.');
+    }
+
+    public function test_produce_skips_invalid_rows(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+
+        $row = $import->rows()->where('rule_type', 'FARM_TO_FARM')->whereIn('resolution_status', ['VALID', 'WARNING'])->firstOrFail();
+        $row->update(['resolution_status' => 'INVALID']);
+        $import->refresh();
+        $expected = $this->expectedProductionCounts($import);
+
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $this->assertSame($expected['matrix'], DowntimeMatrix::count(), 'The row forced to INVALID must not have contributed a production record.');
+    }
+
+    public function test_produce_maps_farm_to_farm_rows_using_resolved_facility_ids(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $saturnToVenus = $import->rows()
+            ->where('origin_raw_label', 'Saturn Farm (Green)')
+            ->where('destination_raw_label', 'Venus Farm')
+            ->sole();
+        $this->assertSame('WARNING', $saturnToVenus->resolution_status);
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        $venus = FacilityList::where('facility_name', 'Venus')->sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $rule = DowntimeMatrix::where('origin_facility_id', $saturn->facility_id)
+            ->where('destination_facility_id', $venus->facility_id)
+            ->sole();
+        $this->assertEquals(12.0, (float) $rule->minimum_downtime);
+        $this->assertEquals(36.0, (float) $rule->maximum_downtime);
+        $this->assertTrue($rule->is_active);
+    }
+
+    public function test_produce_maps_warning_rows_resolved_via_normalized_match(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        // Confirmed by test_upload_parses_real_sample_pdf_...: every
+        // resolvable label in the real fixture matches via NORMALIZED_NAME,
+        // never an exact match, so valid_rows_count is 0 here and every
+        // mapped record necessarily came from a WARNING row.
+        $this->assertSame(0, $import->valid_rows_count);
+        $this->assertGreaterThan(0, $import->warning_rows_count);
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $import));
+
+        $response->assertOk();
+        $import->refresh();
+        $this->assertGreaterThan(0, DowntimeMatrix::count() + DowntimeStationary::count(), 'WARNING rows (normalized-match resolutions) must still be mapped to production.');
+    }
+
+    public function test_produce_maps_stationary_rows_assigning_destination_facility_id_and_never_stores_outside(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $stationaryRows = $import->rows()->where('rule_type', 'STATIONARY')->get();
+        $this->assertSame(8, $stationaryRows->count());
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $expected = $this->expectedProductionCounts($import);
+        $this->assertSame($expected['stationary'], DowntimeStationary::count());
+        $this->assertGreaterThan(0, DowntimeStationary::count());
+        foreach ($stationaryRows as $row) {
+            // Only rows that actually reached production (VALID/WARNING
+            // *and* a resolved destination) should have a corresponding
+            // downtime_stationary row - a row with a resolved facility but
+            // some other disqualifying finding (e.g. an unrelated downtime
+            // value problem) is correctly skipped by produce(), so this
+            // loop must skip it too rather than asserting one exists.
+            if ($row->destination_facility_id === null || !in_array($row->resolution_status, ['VALID', 'WARNING'], true)) {
+                continue;
+            }
+            DowntimeStationary::where('assigned_facility_id', $row->destination_facility_id)
+                ->where('minimum_downtime', $row->minimum_downtime)
+                ->firstOrFail();
+        }
+        // downtime_stationary has no origin column at all - "Outside" (the
+        // implicit STATIONARY sentinel origin) is structurally impossible
+        // to store there. Belt-and-suspenders: confirm no facility is even
+        // named "Outside" that a bug could have accidentally resolved to.
+        $this->assertSame(0, FacilityList::where('facility_name', 'Outside')->count());
+    }
+
+    public function test_produce_expands_lep_dc_group_to_all_active_dc_warehouse_facilities(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        $lepDcToSaturn = $import->rows()
+            ->where('rule_type', 'FARM_TO_FARM')
+            ->where('origin_raw_label', 'LEP, DC')
+            ->where('destination_facility_id', $saturn->facility_id)
+            ->sole();
+        $this->assertNull($lepDcToSaturn->origin_facility_id);
+        $this->assertSame('DC_WAREHOUSE', $lepDcToSaturn->origin_facility_group_category);
+        $this->assertContains($lepDcToSaturn->resolution_status, ['VALID', 'WARNING'], 'this row must be eligible for production for the rest of this test to be meaningful');
+        $dcFacilities = FacilityList::whereHas('facilityCategory', fn ($q) => $q->where('facility_category_name', 'DC_WAREHOUSE'))
+            ->where('is_active', true)
+            ->get();
+        $this->assertEqualsCanonicalizing(['DC Plaridel', 'DC Sta. Rosa'], $dcFacilities->pluck('facility_name')->all());
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        foreach ($dcFacilities as $dc) {
+            $rule = DowntimeMatrix::where('origin_facility_id', $dc->facility_id)
+                ->where('destination_facility_id', $saturn->facility_id)
+                ->sole();
+            $this->assertEquals((float) $lepDcToSaturn->minimum_downtime, (float) $rule->minimum_downtime);
+            $this->assertSame($lepDcToSaturn->maximum_downtime === null, $rule->maximum_downtime === null);
+        }
+        // The group was expanded at production time into individual rows -
+        // never materialized back onto the staging row itself.
+        $lepDcToSaturn->refresh();
+        $this->assertNull($lepDcToSaturn->origin_facility_id);
+        $this->assertSame('DC_WAREHOUSE', $lepDcToSaturn->origin_facility_group_category);
+    }
+
+    public function test_produce_maps_dormitory_only_downtime_as_minimum_with_null_maximum(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        // "Kelsey" is a real FARM-category facility in the seeded data, but
+        // is NOT one of the 8 farms the sample PDF actually references -
+        // Saturn -> Kelsey therefore cannot collide with any of the 56 real
+        // farm-pair rows already staged from parsing (every one of those
+        // pairs two of the PDF's own 8 farms).
+        $kelsey = FacilityList::where('facility_name', 'Kelsey')->sole();
+
+        // The already-computed minimum/maximum on a staging row are copied
+        // through as-is (DowntimeNormalizer already resolved
+        // Downtime-Area-vs-Dormitory-only semantics at parse time) - this
+        // crafts a row shaped exactly like a real "Dormitory only" reading
+        // (minimum_downtime = the dormitory hours, maximum_downtime = null)
+        // to confirm production mapping doesn't recompute or discard that.
+        $row = $import->rows()->where('rule_type', 'FARM_TO_FARM')->whereIn('resolution_status', ['VALID', 'WARNING'])->firstOrFail();
+        $row->update([
+            'origin_facility_id' => $saturn->facility_id,
+            'origin_facility_group_category' => null,
+            'destination_facility_id' => $kelsey->facility_id,
+            'destination_facility_group_category' => null,
+            'minimum_downtime' => 24,
+            'maximum_downtime' => null,
+        ]);
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $rule = DowntimeMatrix::where('origin_facility_id', $saturn->facility_id)
+            ->where('destination_facility_id', $kelsey->facility_id)
+            ->sole();
+        $this->assertEquals(24.0, (float) $rule->minimum_downtime);
+        $this->assertNull($rule->maximum_downtime);
+    }
+
+    public function test_produce_deactivates_existing_active_production_rules_but_does_not_delete_them(): void
+    {
+        $this->seedRealFacilityData();
+        // "Kelsey"/"Forestierra"/"Buenavista Farm" are real FARM-category
+        // facilities in the seeded data but are NOT among the 8 farms the
+        // sample PDF actually references - a rule between them is
+        // guaranteed to never be re-touched (and therefore
+        // reactivated-in-place via updateOrCreate) by this production run,
+        // so it can only ever end up deactivated-and-preserved, which is
+        // exactly what this test needs to isolate.
+        $kelsey = FacilityList::where('facility_name', 'Kelsey')->sole();
+        $forestierra = FacilityList::where('facility_name', 'Forestierra')->sole();
+
+        $oldMatrixRule = DowntimeMatrix::create([
+            'origin_facility_id' => $kelsey->facility_id,
+            'destination_facility_id' => $forestierra->facility_id,
+            'minimum_downtime' => 99,
+            'maximum_downtime' => 100,
+            'is_active' => true,
+        ]);
+        $oldStationaryRule = DowntimeStationary::create([
+            'assigned_facility_id' => $kelsey->facility_id,
+            'minimum_downtime' => 50,
+            'maximum_downtime' => 60,
+            'is_active' => true,
+        ]);
+
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        $this->ajaxPost(route('downtime-matrix-import.produce', $import))->assertOk();
+
+        $oldMatrixRule->refresh();
+        $oldStationaryRule->refresh();
+        $this->assertFalse((bool) $oldMatrixRule->is_active, 'The prior active downtime_matrix rule must be deactivated.');
+        $this->assertFalse((bool) $oldStationaryRule->is_active, 'The prior active downtime_stationary rule must be deactivated.');
+        // Still present in the table, with its original values untouched -
+        // deactivated, not deleted or overwritten.
+        $this->assertDatabaseHas('downtime_matrix', ['rule_id' => $oldMatrixRule->rule_id, 'minimum_downtime' => 99.00]);
+        $this->assertDatabaseHas('downtime_stationary', ['rule_id' => $oldStationaryRule->rule_id, 'minimum_downtime' => 50.00]);
+    }
+
+    public function test_a_failed_production_transaction_leaves_the_existing_production_configuration_unchanged(): void
+    {
+        $this->seedRealFacilityData();
+        $saturn = FacilityList::where('facility_name', 'Saturn')->sole();
+        $kelsey = FacilityList::where('facility_name', 'Kelsey')->sole();
+
+        // Pre-existing "current" production config that must survive a
+        // failed attempt untouched - still active, not deactivated, since
+        // deactivation happens inside the same transaction that fails.
+        $existingRule = DowntimeMatrix::create([
+            'origin_facility_id' => $kelsey->facility_id,
+            'destination_facility_id' => $saturn->facility_id,
+            'minimum_downtime' => 5,
+            'maximum_downtime' => 10,
+            'is_active' => true,
+        ]);
+
+        $this->upload()->assertOk();
+        $import = DowntimeMatrixImport::sole();
+        $this->ajaxPost(route('downtime-matrix-import.verify', $import))->assertOk();
+
+        // Force a genuine, unexpected failure partway through the mapping
+        // loop. This schema's own constraints make a truly "invalid" DB
+        // state hard to construct honestly (a dangling facility id, for
+        // instance, can't happen - the staging rows' facility FKs use
+        // nullOnDelete(), so deleting a referenced facility nulls the
+        // reference out rather than leaving it dangling) - so this stands
+        // in for "something unexpected happened mid-mapping" the same way a
+        // real transient failure (a lock timeout, a dropped connection)
+        // would: it's swapped in only for this one call, after verify()
+        // (and the initial real parse) already ran normally.
+        $this->partialMock(FacilityImportResolver::class, function ($mock) {
+            $mock->shouldReceive('resolveGroupMembers')
+                ->andThrow(new \RuntimeException('Simulated failure while expanding a facility group.'));
+        });
+
+        $response = $this->ajaxPost(route('downtime-matrix-import.produce', $import));
+
+        $response->assertOk();
+        $response->assertSee('Production mapping failed.');
+        $import->refresh();
+        $this->assertSame('VERIFIED', $import->status, 'A failed production transaction must leave the import at VERIFIED, not PRODUCED.');
+        $this->assertNull($import->produced_by);
+        $this->assertNull($import->produced_at);
+        $existingRule->refresh();
+        $this->assertTrue((bool) $existingRule->is_active, 'The prior active rule must still be active - its deactivation was inside the same rolled-back transaction.');
+        $this->assertSame(1, DowntimeMatrix::count(), 'No new production rows may survive a rolled-back transaction.');
     }
 
     // --- Preview page Data Table (rows-data) --------------------------------

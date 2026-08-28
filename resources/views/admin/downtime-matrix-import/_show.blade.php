@@ -10,7 +10,7 @@
             $statusColor = match($downtime_matrix_import->status) {
                 'VERIFIED' => '#28a745',
                 'CANCELLED' => '#6c757d',
-                'PROMOTED' => '#6f42c1',
+                'PRODUCED' => '#6f42c1',
                 default => '#ffc107',
             };
         @endphp
@@ -18,7 +18,7 @@
     </p>
     <p><strong>Uploaded By:</strong> {{ $downtime_matrix_import->uploadedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->created_at?->format('n/d/Y H:i') }}</p>
     {{-- Checked by whether each timestamp is set, not by the current status -
-         once a VERIFIED import is later PROMOTED, its Verified By history
+         once a VERIFIED import is later PRODUCED, its Verified By history
          must still be visible, not hidden just because the status moved on. --}}
     @if($downtime_matrix_import->verified_at)
         <p><strong>Verified By:</strong> {{ $downtime_matrix_import->verifiedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->verified_at?->format('n/d/Y H:i') }}</p>
@@ -26,8 +26,8 @@
     @if($downtime_matrix_import->isCancelled())
         <p><strong>Cancelled By:</strong> {{ $downtime_matrix_import->cancelledBy->user_name ?? '-' }} on {{ $downtime_matrix_import->cancelled_at?->format('n/d/Y H:i') }}</p>
     @endif
-    @if($downtime_matrix_import->promoted_at)
-        <p><strong>Promoted By:</strong> {{ $downtime_matrix_import->promotedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->promoted_at?->format('n/d/Y H:i') }}</p>
+    @if($downtime_matrix_import->produced_at)
+        <p><strong>Produced By:</strong> {{ $downtime_matrix_import->producedBy->user_name ?? '-' }} on {{ $downtime_matrix_import->produced_at?->format('n/d/Y H:i') }}</p>
     @endif
 </div>
 
@@ -572,7 +572,38 @@
     </script>
 @endif
 
-@if($downtime_matrix_import->isPendingVerification())
+@if($productionResult ?? null)
+    {{-- The result of an actual Save to Production attempt (success or
+         failure) - shown once, on the same response that performed it. A
+         successful mapping's counts come straight back from
+         DowntimeMatrixImportService::produce(); "records created" can
+         differ from "rows processed" since a facility-group row (e.g.
+         "LEP, DC") expands into more than one downtime_matrix row. A
+         failed attempt was fully rolled back by produce()'s own DB
+         transaction - the import is still VERIFIED, not PRODUCED, and
+         nothing in downtime_matrix/downtime_stationary changed. --}}
+    <div class="table-wrapper" style="padding: 1.5rem; margin-top: 1.5rem; border-left: 4px solid {{ ($productionResult['success'] ?? false) ? '#28a745' : '#dc3545' }};">
+        @if($productionResult['success'] ?? false)
+            <p style="margin-top: 0;"><strong>Production mapping completed.</strong></p>
+            <table style="margin-bottom: 0;">
+                <tbody>
+                    <tr><td><strong>Staging Rows Processed</strong></td><td>{{ $productionResult['staging_rows_processed'] }}</td></tr>
+                    <tr><td><strong>Production Records Created</strong></td><td>{{ $productionResult['production_records_created'] }}</td></tr>
+                    <tr><td colspan="2" style="padding-top: 0.75rem;"><strong>Mapped</strong></td></tr>
+                    <tr><td>&nbsp;&nbsp;VALID</td><td>{{ $productionResult['mapped']['VALID'] }}</td></tr>
+                    <tr><td>&nbsp;&nbsp;WARNING</td><td>{{ $productionResult['mapped']['WARNING'] }}</td></tr>
+                    <tr><td colspan="2" style="padding-top: 0.75rem;"><strong>Skipped</strong></td></tr>
+                    <tr><td>&nbsp;&nbsp;UNMATCHED</td><td>{{ $productionResult['skipped']['UNMATCHED'] }}</td></tr>
+                    <tr><td>&nbsp;&nbsp;AMBIGUOUS</td><td>{{ $productionResult['skipped']['AMBIGUOUS'] }}</td></tr>
+                    <tr><td>&nbsp;&nbsp;INVALID</td><td>{{ $productionResult['skipped']['INVALID'] }}</td></tr>
+                </tbody>
+            </table>
+        @else
+            <p style="margin-top: 0;"><strong>Production mapping failed.</strong></p>
+            <p style="color: #666; font-size: 13px;">{{ $productionResult['error'] }} No changes were made - the previous production configuration remains active, and this import is still VERIFIED.</p>
+        @endif
+    </div>
+@elseif($downtime_matrix_import->isPendingVerification())
     <div class="form-actions" style="margin-top: 1.5rem;">
         <form method="POST" action="{{ route('downtime-matrix-import.verify', $downtime_matrix_import) }}" class="ajax-form" style="display: inline;">
             @csrf
@@ -583,27 +614,62 @@
             <button type="submit" class="btn btn-danger">Cancel</button>
         </form>
     </div>
-@elseif($promotionMode ?? false)
+@elseif($productionMode ?? false)
     {{-- The confirmation step reached from the import list's "Production"
          action (visible only for VERIFIED rows). This page IS the
          confirmation - no extra JS confirm() popup - so the admin can
          review the same staged rows/tabs above one more time before
-         choosing. Save to Production only flips downtime_matrix_imports.status
-         to PROMOTED; it does not map or write anything into
-         downtime_matrix/downtime_stationary yet - that promotion-target
-         mapping is a separate, not-yet-built phase. Cancel here is a plain
-         link back to the read-only Preview, not a state change - it must
-         never be confused with the PENDING_VERIFICATION "Cancel" above,
-         which actually cancels the import. --}}
+         choosing. Save to Production maps every eligible (VALID/WARNING)
+         staging row into downtime_matrix/downtime_stationary and marks the
+         import PRODUCED - see DowntimeMatrixImportService::produce() for
+         the mapping rules. Cancel here is a plain link back to the
+         read-only Preview, not a state change - it must never be confused
+         with the PENDING_VERIFICATION "Cancel" above, which actually
+         cancels the import. --}}
+    @php
+        // Read from the import's own denormalized counters, not $totalRow -
+        // that variable is only computed inside the hasParseError() ==
+        // false branch above, and a VERIFIED-but-failed-to-parse import
+        // (zero rows, still technically reachable here) would leave it
+        // undefined.
+        $mappedCount = $downtime_matrix_import->valid_rows_count + $downtime_matrix_import->warning_rows_count;
+        $skippedCount = $downtime_matrix_import->unmatched_rows_count + $downtime_matrix_import->ambiguous_rows_count + $downtime_matrix_import->invalid_rows_count;
+    @endphp
     <div class="table-wrapper" style="padding: 1.5rem; margin-top: 1.5rem; border-left: 4px solid #6f42c1;">
-        <p style="margin-top: 0;"><strong>Confirm Production Promotion</strong></p>
-        <p style="color: #666; font-size: 13px;">Review the staged rows above, then choose Save to Production to mark this import as promoted, or Cancel to go back without making any change. This step does not write any rows into the production Downtime Matrix / Downtime Stationary tables yet - that mapping will be implemented in a later phase.</p>
+        <p style="margin-top: 0;"><strong>Confirm Save to Production</strong></p>
+        <table style="margin-bottom: 1rem;">
+            <tbody>
+                <tr><td><strong>File</strong></td><td>{{ $downtime_matrix_import->original_filename }}</td></tr>
+                <tr><td><strong>Import Date</strong></td><td>{{ $downtime_matrix_import->created_at?->format('n/d/Y H:i') }}</td></tr>
+                <tr><td><strong>Total Rows Parsed</strong></td><td>{{ $downtime_matrix_import->total_rows_parsed }}</td></tr>
+                <tr><td><strong>Valid</strong></td><td>{{ $downtime_matrix_import->valid_rows_count }}</td></tr>
+                <tr><td><strong>Warning</strong></td><td>{{ $downtime_matrix_import->warning_rows_count }}</td></tr>
+                <tr><td><strong>Unmatched</strong></td><td>{{ $downtime_matrix_import->unmatched_rows_count }}</td></tr>
+                <tr><td><strong>Ambiguous</strong></td><td>{{ $downtime_matrix_import->ambiguous_rows_count }}</td></tr>
+                <tr><td><strong>Invalid</strong></td><td>{{ $downtime_matrix_import->invalid_rows_count }}</td></tr>
+                <tr style="font-weight: bold;"><td>Rows to be Mapped</td><td>{{ $mappedCount }}</td></tr>
+                <tr style="font-weight: bold;"><td>Rows to be Skipped</td><td>{{ $skippedCount }}</td></tr>
+            </tbody>
+        </table>
+        <p style="color: #666; font-size: 13px;">Review the staged rows above, then choose Save to Production to map the Valid/Warning rows into the live Downtime Matrix / Downtime Stationary configuration, or Cancel to go back without making any change. Existing active production rules will be deactivated (not deleted, kept as history) and replaced by this import's mapped rules.</p>
         <div class="form-actions">
-            <form method="POST" action="{{ route('downtime-matrix-import.promote', $downtime_matrix_import) }}" class="ajax-form" style="display: inline;">
+            <form method="POST" action="{{ route('downtime-matrix-import.produce', $downtime_matrix_import) }}" class="ajax-form" style="display: inline;">
                 @csrf
                 <button type="submit" class="btn">Save to Production</button>
             </form>
             <a href="{{ route('downtime-matrix-import.show', $downtime_matrix_import) }}" class="btn btn-secondary ajax-link">Cancel</a>
         </div>
+    </div>
+@elseif($downtime_matrix_import->isVerified())
+    {{-- Reached right after clicking Verify / Continue above (or by
+         revisiting a VERIFIED import's Preview directly) - previously the
+         only way to reach Save to Production from here was to navigate back
+         to the import list and click its "Production" action there. This
+         is the same action, just reachable without leaving the page - it
+         still only links to the confirmation step (produce.confirm), never
+         straight to produce() itself, so Save to Production still always
+         requires that explicit confirmation. --}}
+    <div class="form-actions" style="margin-top: 1.5rem;">
+        <a href="{{ route('downtime-matrix-import.produce.confirm', $downtime_matrix_import) }}" class="btn ajax-link" style="background: #6f42c1;">Production</a>
     </div>
 @endif

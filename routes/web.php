@@ -74,8 +74,8 @@ Route::middleware('auth')->group(function () {
         Route::put('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/rows', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'updateRows'])->name('downtime-matrix-import.rows.update');
         Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/verify', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'verify'])->name('downtime-matrix-import.verify');
         Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/cancel', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'cancel'])->name('downtime-matrix-import.cancel');
-        Route::get('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/promote', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'promoteConfirm'])->name('downtime-matrix-import.promote.confirm');
-        Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/promote', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'promote'])->name('downtime-matrix-import.promote');
+        Route::get('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/produce', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'produceConfirm'])->name('downtime-matrix-import.produce.confirm');
+        Route::post('admin/biosecurity-rules/downtime-matrix-import/{downtime_matrix_import}/produce', [\App\Http\Controllers\Admin\DowntimeMatrixImportController::class, 'produce'])->name('downtime-matrix-import.produce');
     });
 
     Route::get('admin/roles/data', [\App\Http\Controllers\Admin\RoleController::class, 'data'])->name('roles.data')->middleware('permission:roles.manage');
