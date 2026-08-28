@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Admin - {{ config('app.name') }}</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/2.1.8/css/dataTables.dataTables.min.css">
     <style>
         * {
             margin: 0;
@@ -280,6 +281,7 @@
         </div>
     </div>
     <script src="https://code.jquery.com/jquery-4.0.0.min.js"></script>
+    <script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
     <script src="{{ asset('js/admin.js') }}"></script>
 </body>
 </html>

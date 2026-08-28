@@ -1,4 +1,4 @@
 @extends('layouts.admin')
 @section('content')
-    @include('admin.downtime-matrix._index', compact('downtime_matrix_rules'))
+    @include('admin.downtime-matrix._index', compact('facilities'))
 @endsection

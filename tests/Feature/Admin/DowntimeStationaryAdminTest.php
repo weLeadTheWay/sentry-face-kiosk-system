@@ -45,7 +45,7 @@ class DowntimeStationaryAdminTest extends TestCase
         return $user;
     }
 
-    public function test_index_lists_existing_rule_with_facility_name(): void
+    public function test_index_renders_an_empty_data_table_shell_without_querying_records(): void
     {
         DowntimeStationary::create([
             'assigned_facility_id' => $this->facility->facility_id,
@@ -56,7 +56,28 @@ class DowntimeStationaryAdminTest extends TestCase
         $response = $this->get(route('downtime-stationary.index'));
 
         $response->assertOk();
-        $response->assertSee('ALPHA');
+        $response->assertSee('id="ds-table"', false);
+        $response->assertSee('id="ds-filter-btn"', false);
+        // The Assigned Facility filter dropdown legitimately lists ALPHA as a
+        // selectable facility (small lookup data) - what must NOT appear is
+        // the rule record itself, i.e. an empty <tbody>.
+        $response->assertSee('<tbody></tbody>', false);
+    }
+
+    public function test_data_endpoint_returns_rule_with_facility_name(): void
+    {
+        DowntimeStationary::create([
+            'assigned_facility_id' => $this->facility->facility_id,
+            'minimum_downtime' => 12,
+            'maximum_downtime' => 24,
+        ]);
+
+        $response = $this->getJson(route('downtime-stationary.data'));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.0.assigned_facility', 'ALPHA');
+        $response->assertJsonPath('data.0.minimum_downtime', 12);
+        $response->assertJsonPath('data.0.maximum_downtime', 24);
     }
 
     public function test_create_rule_with_valid_data(): void

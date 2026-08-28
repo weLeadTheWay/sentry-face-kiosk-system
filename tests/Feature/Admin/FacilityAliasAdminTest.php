@@ -54,7 +54,7 @@ class FacilityAliasAdminTest extends TestCase
         return $user;
     }
 
-    public function test_index_lists_alias_with_its_facility_name(): void
+    public function test_index_renders_an_empty_data_table_shell_without_querying_records(): void
     {
         FacilityAlias::create([
             'alias_text' => 'ALIAS FARM (Red-Act)',
@@ -64,8 +64,149 @@ class FacilityAliasAdminTest extends TestCase
         $response = $this->get(route('facility-aliases.index'));
 
         $response->assertOk();
-        $response->assertSee('ALIAS FARM (Red-Act)');
+        // The DataTable shell (headers + filter controls) renders, but the
+        // table isn't turned into a jQuery DataTable (and so never calls
+        // /data) until the admin clicks Filter - so no alias text ever
+        // appears in the initial HTML.
+        $response->assertSee('id="fa-table"', false);
+        $response->assertSee('id="fa-filter-btn"', false);
+        $response->assertDontSee('ALIAS FARM (Red-Act)');
+    }
+
+    public function test_index_shell_lists_facilities_for_the_filter_dropdown_only(): void
+    {
+        FacilityAlias::create([
+            'alias_text' => 'ALIAS FARM (Red-Act)',
+            'facility_id' => $this->facility->facility_id,
+        ]);
+
+        $response = $this->get(route('facility-aliases.index'));
+
+        // The Facility filter dropdown is populated from facility_list
+        // directly on page load (small reference data) - that's distinct
+        // from loading facility_aliases records, which never happens here.
         $response->assertSee('Alias Farm');
+        $response->assertDontSee('ALIAS FARM (Red-Act)');
+    }
+
+    public function test_data_endpoint_returns_datatables_server_side_envelope(): void
+    {
+        FacilityAlias::create([
+            'alias_text' => 'ALIAS FARM (Red-Act)',
+            'facility_id' => $this->facility->facility_id,
+        ]);
+
+        $response = $this->getJson(route('facility-aliases.data', ['draw' => 3]));
+
+        $response->assertOk();
+        $response->assertJsonPath('draw', 3);
+        $response->assertJsonPath('recordsTotal', 1);
+        $response->assertJsonPath('recordsFiltered', 1);
+        $response->assertJsonPath('data.0.alias_text', 'ALIAS FARM (Red-Act)');
+        $response->assertJsonPath('data.0.facility_name', 'Alias Farm');
+    }
+
+    public function test_data_endpoint_with_no_filters_returns_everything_ie_no_filter_is_not_empty(): void
+    {
+        FacilityAlias::create(['alias_text' => 'One', 'facility_id' => $this->facility->facility_id]);
+        FacilityAlias::create(['alias_text' => 'Two', 'facility_id' => $this->facility->facility_id]);
+
+        $response = $this->getJson(route('facility-aliases.data'));
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsTotal', 2);
+        $response->assertJsonPath('recordsFiltered', 2);
+        $response->assertJsonCount(2, 'data');
+    }
+
+    public function test_data_endpoint_facility_id_all_is_equivalent_to_no_filter(): void
+    {
+        FacilityAlias::create(['alias_text' => 'One', 'facility_id' => $this->facility->facility_id]);
+
+        $response = $this->getJson(route('facility-aliases.data', ['facility_id' => 'ALL']));
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsFiltered', 1);
+    }
+
+    public function test_data_endpoint_filters_by_facility_id(): void
+    {
+        $otherFacility = FacilityList::create([
+            'facility_type_id' => $this->facility->facility_type_id,
+            'facility_category_id' => $this->facility->facility_category_id,
+            'facility_code' => 'OTHERFARM',
+            'facility_name' => 'Other Farm',
+        ]);
+        FacilityAlias::create(['alias_text' => 'Mine', 'facility_id' => $this->facility->facility_id]);
+        FacilityAlias::create(['alias_text' => 'TheirsToo', 'facility_id' => $otherFacility->facility_id]);
+
+        $response = $this->getJson(route('facility-aliases.data', ['facility_id' => $this->facility->facility_id]));
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsTotal', 2);
+        $response->assertJsonPath('recordsFiltered', 1);
+        $response->assertJsonPath('data.0.alias_text', 'Mine');
+    }
+
+    public function test_data_endpoint_filters_by_alias_text_contains(): void
+    {
+        FacilityAlias::create(['alias_text' => 'Saturn Farm (Green)', 'facility_id' => $this->facility->facility_id]);
+        FacilityAlias::create(['alias_text' => 'Venus Farm (Red)', 'facility_id' => $this->facility->facility_id]);
+
+        $response = $this->getJson(route('facility-aliases.data', ['alias_text' => 'Green']));
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsFiltered', 1);
+        $response->assertJsonPath('data.0.alias_text', 'Saturn Farm (Green)');
+    }
+
+    public function test_data_endpoint_paginates_via_start_and_length(): void
+    {
+        for ($i = 1; $i <= 5; $i++) {
+            FacilityAlias::create(['alias_text' => 'Alias ' . $i, 'facility_id' => $this->facility->facility_id]);
+        }
+
+        $response = $this->getJson(route('facility-aliases.data', ['start' => 0, 'length' => 2]));
+        $response->assertOk();
+        $response->assertJsonPath('recordsFiltered', 5);
+        $response->assertJsonCount(2, 'data');
+
+        $secondPage = $this->getJson(route('facility-aliases.data', ['start' => 2, 'length' => 2]));
+        $secondPage->assertJsonCount(2, 'data');
+        $this->assertNotSame(
+            $response->json('data.0.alias_id'),
+            $secondPage->json('data.0.alias_id'),
+            'different pages must return different rows'
+        );
+    }
+
+    public function test_data_endpoint_orders_descending_by_alias_text_when_requested(): void
+    {
+        FacilityAlias::create(['alias_text' => 'Alpha', 'facility_id' => $this->facility->facility_id]);
+        FacilityAlias::create(['alias_text' => 'Beta', 'facility_id' => $this->facility->facility_id]);
+
+        $response = $this->getJson(route('facility-aliases.data', [
+            'order' => [['column' => 0, 'dir' => 'desc']],
+        ]));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.0.alias_text', 'Beta');
+        $response->assertJsonPath('data.1.alias_text', 'Alpha');
+    }
+
+    public function test_data_endpoint_requires_permission(): void
+    {
+        $role = Role::create(['role_name' => 'NoPermissions']);
+        $user = User::create([
+            'role_id' => $role->role_id,
+            'user_name' => 'nobody',
+            'user_email' => 'nobody@example.com',
+            'hash_password' => bcrypt('password'),
+            'is_active' => true,
+        ]);
+        $this->actingAs($user);
+
+        $this->getJson(route('facility-aliases.data'))->assertForbidden();
     }
 
     public function test_create_alias_for_existing_facility(): void

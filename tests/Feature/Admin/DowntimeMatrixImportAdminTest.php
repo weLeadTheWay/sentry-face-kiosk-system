@@ -128,6 +128,32 @@ class DowntimeMatrixImportAdminTest extends TestCase
         $this->get(route('downtime-matrix-import.index'))->assertOk();
     }
 
+    public function test_index_renders_an_empty_data_table_shell_without_querying_records(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.index'));
+
+        $response->assertOk();
+        $response->assertSee('id="dmi-table"', false);
+        $response->assertSee('id="dmi-filter-btn"', false);
+        $response->assertDontSee($import->original_filename);
+    }
+
+    public function test_data_endpoint_returns_the_uploaded_import(): void
+    {
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.data'));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.0.import_id', $import->import_id);
+        $response->assertJsonPath('data.0.original_filename', $import->original_filename);
+        $response->assertJsonPath('data.0.status', 'PENDING_VERIFICATION');
+    }
+
     public function test_create_renders_as_ajax_partial_and_as_a_full_page(): void
     {
         $this->ajaxGet(route('downtime-matrix-import.create'))->assertOk();
@@ -341,5 +367,243 @@ class DowntimeMatrixImportAdminTest extends TestCase
 
         $this->assertSame($preExistingMatrixCount, DowntimeMatrix::count(), 'downtime_matrix must never be written to by the import pipeline, even after Verify.');
         $this->assertSame($preExistingStationaryCount, DowntimeStationary::count(), 'downtime_stationary must never be written to by the import pipeline, even after Verify.');
+    }
+
+    // --- Preview page Data Table (rows-data) --------------------------------
+
+    public function test_show_page_shell_has_all_three_tabs_but_leaks_no_row_data(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.show', $import));
+
+        $response->assertOk();
+        $response->assertSee('id="dmi-ftf-table"', false);
+        $response->assertSee('id="dmi-stn-table"', false);
+        $response->assertSee('id="dmi-oth-table"', false);
+        $response->assertSee('id="dmi-ftf-filter-btn"', false);
+        $response->assertSee('id="dmi-ftf-filter-origin"', false);
+        $response->assertSee('id="dmi-ftf-filter-destination"', false);
+        $response->assertSee('id="dmi-stn-filter-destination"', false);
+        $response->assertSee('data-dmi-tab="all"', false);
+        // The Import Summary aggregate (row counts per category/status) and
+        // the Origin/Destination/Designated-Farm filter DROPDOWN OPTIONS
+        // (distinct raw labels, small lookup data - same reasoning as every
+        // other admin Data Table's filter-dropdown query) are legitimately
+        // server-rendered. An actual per-ROW value like validation_message
+        // is not - that only ever appears once a Filter click has run.
+        $response->assertSee('Saturn Farm (Green)');
+        $response->assertDontSee('No downtime required for this cell.');
+    }
+
+    public function test_rows_data_endpoint_returns_datatables_envelope_scoped_by_rule_type(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=STATIONARY&draw=5');
+
+        $response->assertOk();
+        $response->assertJsonPath('draw', 5);
+        $response->assertJsonPath('recordsTotal', 8);
+        $response->assertJsonPath('recordsFiltered', 8);
+        $this->assertCount(8, $response->json('data'));
+    }
+
+    public function test_rows_data_filters_by_status(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        // Every real Farm-to-Farm row lands WARNING (normalized-name match,
+        // no aliases seeded) per test_upload_parses_real_sample_pdf_...
+        $warning = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&status=WARNING');
+        $warning->assertJsonPath('recordsFiltered', 72);
+
+        $invalid = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&status=INVALID');
+        $invalid->assertJsonPath('recordsFiltered', 0);
+        $this->assertSame([], $invalid->json('data'));
+    }
+
+    public function test_rows_data_filters_by_search_on_raw_labels(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&label_search=Saturn+Farm+(Green)');
+
+        $response->assertOk();
+        $this->assertGreaterThan(0, $response->json('recordsFiltered'));
+        foreach ($response->json('data') as $row) {
+            $this->assertStringContainsString('Saturn', $row['origin_display']);
+        }
+    }
+
+    public function test_rows_data_filters_by_origin_and_destination_dropdowns_exact_match(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        // Every Saturn-origin Farm-to-Farm row has this exact raw label
+        // (confirmed by test_upload_parses_real_sample_pdf_...) - there are
+        // 8 farms total, so Saturn's 7 non-self destinations plus its
+        // synthesized LEP,DC row = 8 rows for this one origin.
+        $originOnly = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&origin_raw_label=' . urlencode('Saturn Farm (Green)'));
+        $originOnly->assertOk();
+        $this->assertSame(8, $originOnly->json('recordsFiltered'));
+        foreach ($originOnly->json('data') as $row) {
+            $this->assertStringContainsString('Saturn', $row['origin_display']);
+        }
+
+        // Combining Origin + Destination narrows to exactly one pair.
+        $both = $this->getJson(route('downtime-matrix-import.rows-data', $import)
+            . '?rule_type=FARM_TO_FARM'
+            . '&origin_raw_label=' . urlencode('Saturn Farm (Green)')
+            . '&destination_raw_label=' . urlencode('Venus Farm'));
+        $both->assertOk();
+        $both->assertJsonPath('recordsFiltered', 1);
+        $both->assertJsonPath('data.0.destination_display', 'Venus');
+
+        // "ALL" (the dropdown's default option) means unrestricted, exactly
+        // like every other admin Data Table dropdown filter in this app.
+        $unfiltered = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&origin_raw_label=ALL&destination_raw_label=ALL');
+        $unfiltered->assertJsonPath('recordsFiltered', 72);
+    }
+
+    public function test_rows_data_stationary_filters_by_designated_farm_dropdown(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=STATIONARY&destination_raw_label=' . urlencode('Saturn Farm'));
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsFiltered', 1);
+        $response->assertJsonPath('data.0.destination_display', 'Saturn');
+    }
+
+    public function test_show_page_populates_origin_destination_and_designated_farm_dropdown_options(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->ajaxGet(route('downtime-matrix-import.show', $import));
+
+        $response->assertOk();
+        // These are the distinct raw labels actually present in the parsed
+        // rows for each tab, not every facility in facility_list - e.g.
+        // "Outside" only ever appears as a Stationary origin, never as a
+        // Farm-to-Farm option.
+        $response->assertSeeInOrder(['id="dmi-ftf-filter-origin"', 'Saturn Farm (Green)'], false);
+        $response->assertSeeInOrder(['id="dmi-ftf-filter-destination"', 'Venus'], false);
+        $response->assertSeeInOrder(['id="dmi-stn-filter-destination"', 'Saturn'], false);
+    }
+
+    public function test_rows_data_resolves_facility_group_display_not_the_raw_category(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&label_search=LEP&length=20');
+
+        $response->assertOk();
+        $this->assertGreaterThan(0, $response->json('recordsFiltered'));
+        $groupRow = collect($response->json('data'))
+            ->first(fn ($row) => str_starts_with($row['origin_display'], 'DC Warehouses (') || str_starts_with($row['destination_display'], 'DC Warehouses ('));
+        $this->assertNotNull($groupRow, 'expected at least one row displaying the resolved "DC Warehouses (...)" group, not the raw "LEP, DC" label');
+        $displayed = str_starts_with($groupRow['origin_display'], 'DC Warehouses (') ? $groupRow['origin_display'] : $groupRow['destination_display'];
+        $this->assertStringContainsString('DC Plaridel', $displayed);
+    }
+
+    public function test_rows_data_stationary_destination_is_a_resolved_facility_name(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=STATIONARY&length=20');
+
+        $response->assertOk();
+        foreach ($response->json('data') as $row) {
+            $this->assertStringNotContainsString('(unresolved)', $row['destination_display']);
+        }
+    }
+
+    public function test_rows_data_paginates_via_start_and_length(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $firstPage = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&start=0&length=10');
+        $firstPage->assertJsonPath('recordsFiltered', 72);
+        $this->assertCount(10, $firstPage->json('data'));
+
+        $secondPage = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&start=10&length=10');
+        $this->assertCount(10, $secondPage->json('data'));
+        $this->assertNotSame($firstPage->json('data.0.import_row_id'), $secondPage->json('data.0.import_row_id'));
+    }
+
+    public function test_rows_data_orders_by_minimum_downtime_descending_when_requested(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        // JS column position 2 = minimum_downtime for the Farm-to-Farm/Others
+        // shape (0=origin, 1=destination, 2=min, 3=max, 4=status, 5=message).
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import) . '?rule_type=FARM_TO_FARM&length=100&order[0][column]=2&order[0][dir]=desc');
+
+        $response->assertOk();
+        $values = collect($response->json('data'))->pluck('minimum_downtime')->filter(fn ($v) => $v !== null)->values();
+        $sorted = $values->sortDesc()->values();
+        $this->assertSame($sorted->all(), $values->all(), 'rows must be sorted by minimum_downtime descending');
+    }
+
+    public function test_rows_data_tolerates_datatables_own_reserved_search_param(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        // DataTables.js always sends search[value]/search[regex] as part of
+        // its base request object, even with searching:false and even when
+        // a tab's own JS never sets a "search" key itself - this arrives
+        // server-side as an array under the query key "search". The
+        // Farm-to-Farm/Stationary tabs' own custom filter is deliberately
+        // named label_search (not search) specifically to avoid this
+        // colliding with a plain string cast; this test locks that in.
+        $response = $this->getJson(route('downtime-matrix-import.rows-data', $import)
+            . '?rule_type=STATIONARY&search[value]=&search[regex]=false&status=ALL&destination_raw_label=ALL');
+
+        $response->assertOk();
+        $response->assertJsonPath('recordsFiltered', 8);
+    }
+
+    public function test_rows_data_requires_permission(): void
+    {
+        $this->seedRealFacilityData();
+        $this->upload();
+        $import = DowntimeMatrixImport::sole();
+
+        $role = Role::create(['role_name' => 'NoPermissions']);
+        $this->actingAs(User::create([
+            'role_id' => $role->role_id,
+            'user_name' => 'nobody',
+            'user_email' => 'nobody@example.com',
+            'hash_password' => bcrypt('password'),
+            'is_active' => true,
+        ]));
+
+        $this->getJson(route('downtime-matrix-import.rows-data', $import))->assertForbidden();
     }
 }

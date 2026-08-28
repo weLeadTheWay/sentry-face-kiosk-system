@@ -51,7 +51,7 @@ class FacilityAdminTest extends TestCase
         return $user;
     }
 
-    public function test_index_lists_existing_facilities_with_type_and_category(): void
+    public function test_index_renders_an_empty_data_table_shell_without_querying_records(): void
     {
         FacilityList::create([
             'facility_type_id' => $this->type->facility_type_id,
@@ -64,10 +64,103 @@ class FacilityAdminTest extends TestCase
         $response = $this->get(route('facilities.index'));
 
         $response->assertOk();
-        $response->assertSee('TESTFARM');
-        $response->assertSee('Test Farm');
-        $response->assertSee('BVA');
-        $response->assertSee('FARM');
+        $response->assertSee('id="fl-table"', false);
+        $response->assertSee('id="fl-filter-btn"', false);
+        // The Data Table Shell must not bake any record data into the HTML -
+        // that is now the data endpoint's job, fetched via AJAX. (The Type/
+        // Category filter dropdowns legitimately list "BVA"/"FARM" as
+        // selectable lookup options - that's not the facility record itself.)
+        $response->assertDontSee('TESTFARM');
+        $response->assertDontSee('Test Farm');
+    }
+
+    public function test_data_endpoint_returns_datatables_server_side_envelope(): void
+    {
+        FacilityList::create([
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+            'facility_code' => 'TESTFARM',
+            'facility_name' => 'Test Farm',
+            'is_rtl' => true,
+        ]);
+
+        $response = $this->getJson(route('facilities.data', ['draw' => 2]));
+
+        $response->assertOk();
+        $response->assertJsonPath('draw', 2);
+        $response->assertJsonPath('recordsTotal', 1);
+        $response->assertJsonPath('recordsFiltered', 1);
+        $response->assertJsonPath('data.0.facility_code', 'TESTFARM');
+        $response->assertJsonPath('data.0.facility_name', 'Test Farm');
+        $response->assertJsonPath('data.0.facility_type', 'BVA');
+        $response->assertJsonPath('data.0.facility_category', 'FARM');
+        $response->assertJsonPath('data.0.is_rtl', true);
+    }
+
+    public function test_data_endpoint_paginates_via_start_and_length(): void
+    {
+        for ($i = 1; $i <= 3; $i++) {
+            FacilityList::create([
+                'facility_type_id' => $this->type->facility_type_id,
+                'facility_category_id' => $this->category->facility_category_id,
+                'facility_code' => 'PAGE' . $i,
+                'facility_name' => 'Page Facility ' . $i,
+            ]);
+        }
+
+        $response = $this->getJson(route('facilities.data', ['start' => 0, 'length' => 2]));
+
+        $response->assertOk();
+        $response->assertJsonCount(2, 'data');
+        $response->assertJsonPath('recordsTotal', 3);
+        $response->assertJsonPath('recordsFiltered', 3);
+
+        $secondPage = $this->getJson(route('facilities.data', ['start' => 2, 'length' => 2]));
+        $secondPage->assertJsonCount(1, 'data');
+    }
+
+    public function test_data_endpoint_filters_by_search_type_category_and_status(): void
+    {
+        FacilityList::create([
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+            'facility_code' => 'ONLINEFARM',
+            'facility_name' => 'Online Farm',
+            'is_active' => true,
+        ]);
+        FacilityList::create([
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+            'facility_code' => 'OFFLINEFARM',
+            'facility_name' => 'Offline Farm',
+            'is_active' => false,
+        ]);
+
+        $search = $this->getJson(route('facilities.data', ['search' => 'ONLINEFARM']));
+        $search->assertJsonPath('recordsFiltered', 1);
+        $search->assertJsonPath('data.0.facility_code', 'ONLINEFARM');
+
+        $status = $this->getJson(route('facilities.data', ['status' => 'INACTIVE']));
+        $status->assertJsonPath('recordsFiltered', 1);
+        $status->assertJsonPath('data.0.facility_code', 'OFFLINEFARM');
+
+        $all = $this->getJson(route('facilities.data', ['status' => 'ALL']));
+        $all->assertJsonPath('recordsFiltered', 2);
+    }
+
+    public function test_data_endpoint_requires_permission(): void
+    {
+        $role = Role::create(['role_name' => 'NoPermissions']);
+        $user = User::create([
+            'role_id' => $role->role_id,
+            'user_name' => 'nobody',
+            'user_email' => 'nobody@example.com',
+            'hash_password' => bcrypt('password'),
+            'is_active' => true,
+        ]);
+        $this->actingAs($user);
+
+        $this->getJson(route('facilities.data'))->assertForbidden();
     }
 
     public function test_create_facility_with_valid_data(): void

@@ -2,17 +2,52 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Admin\Concerns\HandlesDataTablesRequest;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreEmployeeTypeRequest;
 use App\Http\Requests\Admin\UpdateEmployeeTypeRequest;
 use App\Models\EmployeeType;
+use Illuminate\Http\JsonResponse;
 
 class EmployeeTypeController extends Controller
 {
+    use HandlesDataTablesRequest;
+
     public function index()
     {
-        $employee_types = EmployeeType::paginate(config('sentry.pagination'));
-        return $this->view('admin.employee-types._index', compact('employee_types'));
+        return $this->view('admin.employee-types._index');
+    }
+
+    public function data(): JsonResponse
+    {
+        $base = EmployeeType::query()->select(['employee_type_id', 'employee_type_name']);
+
+        $recordsTotal = (clone $base)->count();
+
+        $filtered = clone $base;
+
+        $search = trim((string) request()->query('search', ''));
+        if ($search !== '') {
+            $filtered->where('employee_type_name', 'like', '%' . $search . '%');
+        }
+
+        $recordsFiltered = (clone $filtered)->count();
+
+        $rows = $filtered
+            ->orderBy('employee_type_name', $this->dtOrderDir())
+            ->offset($this->dtStart())
+            ->limit($this->dtLength())
+            ->get();
+
+        return response()->json([
+            'draw' => $this->dtDraw(),
+            'recordsTotal' => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'data' => $rows->map(fn (EmployeeType $type) => [
+                'employee_type_id' => $type->employee_type_id,
+                'employee_type_name' => $type->employee_type_name,
+            ])->all(),
+        ]);
     }
 
     public function create()

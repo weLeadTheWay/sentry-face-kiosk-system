@@ -47,7 +47,7 @@ class DowntimeMatrixAdminTest extends TestCase
         return $user;
     }
 
-    public function test_index_lists_existing_rule_with_facility_names(): void
+    public function test_index_renders_an_empty_data_table_shell_without_querying_records(): void
     {
         DowntimeMatrix::create([
             'origin_facility_id' => $this->origin->facility_id,
@@ -59,8 +59,30 @@ class DowntimeMatrixAdminTest extends TestCase
         $response = $this->get(route('downtime-matrix.index'));
 
         $response->assertOk();
-        $response->assertSee('ALPHA');
-        $response->assertSee('BETA');
+        $response->assertSee('id="dm-table"', false);
+        $response->assertSee('id="dm-filter-btn"', false);
+        // The Origin/Destination filter dropdowns legitimately list ALPHA/BETA
+        // as selectable facilities (small lookup data) - what must NOT appear
+        // is the rule record itself, i.e. an empty <tbody>.
+        $response->assertSee('<tbody></tbody>', false);
+    }
+
+    public function test_data_endpoint_returns_rule_with_facility_names(): void
+    {
+        DowntimeMatrix::create([
+            'origin_facility_id' => $this->origin->facility_id,
+            'destination_facility_id' => $this->destination->facility_id,
+            'minimum_downtime' => 12,
+            'maximum_downtime' => 24,
+        ]);
+
+        $response = $this->getJson(route('downtime-matrix.data'));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.0.origin_facility', 'ALPHA');
+        $response->assertJsonPath('data.0.destination_facility', 'BETA');
+        $response->assertJsonPath('data.0.minimum_downtime', 12);
+        $response->assertJsonPath('data.0.maximum_downtime', 24);
     }
 
     public function test_create_rule_with_valid_data(): void

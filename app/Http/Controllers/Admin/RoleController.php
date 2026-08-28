@@ -2,21 +2,61 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Admin\Concerns\HandlesDataTablesRequest;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreRoleRequest;
 use App\Http\Requests\Admin\UpdateRoleRequest;
 use App\Models\Role;
 use App\Models\Permission;
 use App\Services\RolePermissionService;
+use Illuminate\Http\JsonResponse;
 
 class RoleController extends Controller
 {
+    use HandlesDataTablesRequest;
+
     public function __construct(private RolePermissionService $service) {}
 
     public function index()
     {
-        $roles = Role::paginate(config('sentry.pagination'));
-        return $this->view('admin.roles._index', compact('roles'));
+        return $this->view('admin.roles._index');
+    }
+
+    public function data(): JsonResponse
+    {
+        $base = Role::query()->select(['role_id', 'role_name', 'description']);
+
+        $recordsTotal = (clone $base)->count();
+
+        $filtered = clone $base;
+
+        $search = trim((string) request()->query('search', ''));
+        if ($search !== '') {
+            $filtered->where('role_name', 'like', '%' . $search . '%');
+        }
+
+        $recordsFiltered = (clone $filtered)->count();
+
+        // JS column positions: 0=role_name, 1=description, 2=actions[non-orderable].
+        $orderableColumns = [0 => 'role_name', 1 => 'description'];
+        $orderColumn = $this->dtOrderColumn($orderableColumns, 'role_name');
+
+        $rows = $filtered
+            ->orderBy($orderColumn, $this->dtOrderDir())
+            ->offset($this->dtStart())
+            ->limit($this->dtLength())
+            ->get();
+
+        return response()->json([
+            'draw' => $this->dtDraw(),
+            'recordsTotal' => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'data' => $rows->map(fn (Role $role) => [
+                'role_id' => $role->role_id,
+                'role_name' => $role->role_name,
+                'description' => $role->description,
+            ])->all(),
+        ]);
     }
 
     public function create()

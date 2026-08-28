@@ -1,3 +1,21 @@
+/**
+ * Shared across every admin Data Table's DataTables.js `render` callbacks.
+ * DataTables inserts a render() function's return value via innerHTML -
+ * even a plain string with no HTML tags - so any free-text database column
+ * (name, description, filename, IP, etc.) rendered through a custom render()
+ * must be escaped here. Columns with NO custom render (plain `{data: 'x'}`)
+ * are already safe - DataTables text-renders those by default.
+ */
+function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 jQuery(document).ready(function($) {
     const contentPane = $('#content');
 
