@@ -80,9 +80,28 @@
             padding: 15px;
             background: #f0f0f0;
             border-radius: 4px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             font-size: 14px;
             min-height: 40px;
+        }
+        .pose-progress {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .pose-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ddd;
+            transition: background 0.2s;
+        }
+        .pose-dot.active {
+            background: #667eea;
+        }
+        .pose-dot.done {
+            background: #28a745;
         }
         .loading {
             display: none;
@@ -110,12 +129,17 @@
             <div class="status" id="status">Initializing camera...</div>
 
             <div class="video-container">
-                <video id="webcam" autoplay playsinline></video>
+                <video id="webcam" autoplay playsinline muted></video>
+            </div>
+
+            <div class="pose-progress" id="pose-progress">
+                <div class="pose-dot" id="pose-dot-FRONT" title="Front"></div>
+                <div class="pose-dot" id="pose-dot-LEFT" title="Left"></div>
+                <div class="pose-dot" id="pose-dot-RIGHT" title="Right"></div>
             </div>
 
             <div class="controls" id="capture-controls">
-                <button class="btn" id="capture-btn" onclick="captureFrame()">📸 Capture Face</button>
-                <button class="btn btn-secondary" onclick="window.history.back()">Cancel</button>
+                <button class="btn btn-secondary" onclick="cancelEnrollment()">Cancel</button>
             </div>
 
             <div class="loading" id="loading">
@@ -142,79 +166,104 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="{{ asset('js/face-enrollment.js') }}"></script>
     <script>
         const token = new URL(window.location).searchParams.get('token');
         let stream = null;
         let lastDirectoryId = null;
-        let modelsLoaded = false;
+        let enrollment = null;
 
-        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
-        const MIN_FACE_CONFIDENCE = 0.7;
+        // Human-readable status text per FaceEnrollment state/reason - kept
+        // here (not in the shared module) since wording is a per-page
+        // concern, while the actual detection/pose logic is shared.
+        const STATE_MESSAGES = {
+            IDLE: 'Initializing...',
+            INITIALIZING_CAMERA: 'Loading face recognition models...',
+            DETECTING_FACE: {
+                NO_FACE: 'No face detected. Please center your face in the camera.',
+                MULTIPLE_FACES: 'Please ensure only one face is visible.',
+                LOW_CONFIDENCE: 'Face not clear. Please improve lighting.',
+                default: 'Looking for your face...',
+            },
+            POSITIONING: {
+                TOO_FAR: 'Move closer to the camera.',
+                TOO_CLOSE: 'Move back a little.',
+                OFF_CENTER: 'Please center your face in the frame.',
+                default: 'Position your face in the frame.',
+            },
+            FRONT_READY: { WRONG_POSE: 'Look straight at the camera.', default: 'Hold still...' },
+            LEFT_READY: { WRONG_POSE: 'Slowly turn your head left.', default: 'Hold still...' },
+            RIGHT_READY: { WRONG_POSE: 'Slowly turn your head right.', default: 'Hold still...' },
+            FRONT_CAPTURED: 'Front captured!',
+            LEFT_CAPTURED: 'Left captured!',
+            RIGHT_CAPTURED: 'Right captured!',
+            PROCESSING: 'Finishing up...',
+            DUPLICATE_CHECK: 'Checking for an existing profile...',
+            COMPLETE: 'Enrollment captured. Submitting...',
+            PROCESSING_ERROR: 'Something went wrong with face detection. Please try again.',
+        };
 
-        async function loadModels() {
-            document.getElementById('status').textContent = 'Loading face recognition models...';
-            await Promise.all([
-                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-                faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-            ]);
-            modelsLoaded = true;
+        function statusFor(state, meta) {
+            const entry = STATE_MESSAGES[state];
+            if (!entry) {
+                return 'Working...';
+            }
+            if (typeof entry === 'string') {
+                return entry;
+            }
+            return entry[(meta && meta.reason) || 'default'] || entry.default;
+        }
+
+        function updatePoseProgress(state, meta) {
+            const poses = ['FRONT', 'LEFT', 'RIGHT'];
+            const capturedIndex = { FRONT_CAPTURED: 0, LEFT_CAPTURED: 1, RIGHT_CAPTURED: 2 }[state];
+            const activePose = meta && meta.pose;
+
+            poses.forEach((pose, index) => {
+                const dot = document.getElementById('pose-dot-' + pose);
+                dot.classList.remove('active', 'done');
+                if (capturedIndex !== undefined && index <= capturedIndex) {
+                    dot.classList.add('done');
+                } else if (activePose === pose) {
+                    dot.classList.add('active');
+                }
+            });
+        }
+
+        function onEnrollmentStateChange(state, meta) {
+            document.getElementById('status').textContent = statusFor(state, meta);
+            updatePoseProgress(state, meta);
         }
 
         async function initCamera() {
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
                 document.getElementById('webcam').srcObject = stream;
-                await loadModels();
-                document.getElementById('status').textContent = 'Camera ready. Click "Capture Face" when ready.';
             } catch (err) {
                 document.getElementById('status').textContent = 'Camera access denied. Please enable camera permissions.';
+                return;
             }
+
+            enrollment = FaceEnrollment.start({
+                videoEl: document.getElementById('webcam'),
+                onStateChange: onEnrollmentStateChange,
+                onComplete: submitEnrollment,
+                onError: (err) => {
+                    console.error('Face enrollment error:', err);
+                },
+            });
         }
 
-        async function captureFrame() {
-            if (!modelsLoaded) {
-                document.getElementById('status').textContent = 'Face models still loading, please wait...';
-                return;
+        function cancelEnrollment() {
+            if (enrollment) {
+                enrollment.stop();
             }
-
-            const video = document.getElementById('webcam');
-            document.getElementById('status').textContent = 'Detecting face...';
-
-            const detections = await faceapi
-                .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
-                .withFaceLandmarks()
-                .withFaceDescriptors();
-
-            if (detections.length === 0) {
-                document.getElementById('status').textContent = 'No face detected. Please center your face in the camera and try again.';
-                return;
-            }
-
-            if (detections.length > 1) {
-                document.getElementById('status').textContent = 'Please ensure only one face is visible.';
-                return;
-            }
-
-            const detection = detections[0];
-
-            if (detection.detection.score < MIN_FACE_CONFIDENCE) {
-                document.getElementById('status').textContent = 'Face not clear, please try again in better lighting.';
-                return;
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0);
-            const imageData = canvas.toDataURL('image/jpeg');
-            const descriptorArray = Array.from(detection.descriptor);
-
-            registerFace(descriptorArray, imageData);
+            window.history.back();
         }
 
-        function registerFace(descriptorArray, imageData) {
+        function submitEnrollment(poses) {
+            document.getElementById('capture-controls').style.display = 'none';
+            document.getElementById('pose-progress').style.display = 'none';
             document.getElementById('loading').style.display = 'block';
             document.getElementById('status').textContent = 'Processing...';
 
@@ -226,8 +275,10 @@
                 },
                 body: JSON.stringify({
                     token: token,
-                    descriptor: descriptorArray,
-                    face_image: imageData,
+                    // Only the poses actually captured are ever sent - the
+                    // guided flow always captures all three, but this never
+                    // fabricates a pose that wasn't genuinely obtained.
+                    poses: poses,
                 }),
             })
             .then(res => res.json())
@@ -236,7 +287,6 @@
 
                 if (data.status === 'face_found_different_directory') {
                     lastDirectoryId = data.directory_id;
-                    document.getElementById('capture-controls').style.display = 'none';
                     document.getElementById('face-match-prompt').style.display = 'block';
                     document.getElementById('matched-name').textContent = data.matched_name || 'Unknown Person';
                     document.getElementById('status').textContent = 'Found existing face...';

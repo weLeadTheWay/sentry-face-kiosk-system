@@ -128,8 +128,19 @@ class KioskTruckFlowTest extends TestCase
         ]);
     }
 
+    /**
+     * FRONT-only for now - the guided multi-pose capture UX hasn't shipped
+     * yet, so a bare 'descriptor' key here is transparently wrapped into
+     * the {poses: {FRONT: {...}}} shape the endpoint now expects, matching
+     * exactly what kiosk/show.blade.php's gatesale registration JS sends.
+     */
     private function registerIdentity(array $body)
     {
+        if (array_key_exists('descriptor', $body)) {
+            $body['poses'] = ['FRONT' => ['descriptor' => $body['descriptor']]];
+            unset($body['descriptor']);
+        }
+
         return $this->postJson("/kiosk/{$this->kiosk->kiosk_id}/gatesale/register-identity", array_merge([
             'visitor_type' => 'Truck',
         ], $body), [
@@ -190,7 +201,7 @@ class KioskTruckFlowTest extends TestCase
             'visitor_type' => 'Gatesale',
             'full_name' => 'Gatesale Visitor',
             'company' => 'Acme',
-            'descriptor' => $this->descriptor(0.12),
+            'poses' => ['FRONT' => ['descriptor' => $this->descriptor(0.12)]],
         ], ['X-KIOSK-TOKEN' => $this->kiosk->kiosk_token]);
 
         $response->assertOk()->assertJson(['success' => true]);

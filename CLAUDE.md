@@ -3,7 +3,7 @@
 > **MANDATORY — READ BEFORE ANY WORK IN THIS REPO.**
 > Before answering any question, explaining behavior, or implementing any change (new feature, bug fix, endpoint, business-rule change, refactor, migration) in this repository, you MUST read this file in full first. Use it to identify which module(s) the request touches, then read that module's section and its listed critical files before writing or explaining anything. Do not rely on memory of a previous session's reading of this file — re-read it at the start of every new conversation/session. If the request is trivial (e.g. answering from a single obviously-unrelated file), still confirm against this file's module map that it's actually unrelated before skipping deeper reading.
 
-This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26; the "Facility Master Data" module and its tables were added 2026-08-27 in two same-day phases — Phase 1 built the tables as dormant/parallel data, Phase 2 cut `visitor_request`/`kiosk_device`/Visitor Sync over to depend on them for real — see that module's section for exactly what is and isn't wired in; the "Downtime Matrix PDF Import" module — Phase 1, parse/validate/preview only, no production-table writes — was added 2026-08-27; its Phase 2 (added 2026-08-28) added a real "Save to Production" mapping step that writes verified imports' eligible rows into `downtime_matrix`/`downtime_stationary` (deactivating, never deleting, whatever was previously active) — see that module's section for the full mapping rules; on 2026-08-28, every admin listing under `Admin Management` (Facilities, Facility Aliases, Kiosk Devices, Identity Types, Employee Types, Downtime Matrix, Downtime Stationary, the Downtime Matrix Import *list*, Roles, Users, Audit Logs) was migrated — through two superseded intermediate approaches, both now fully removed — to a real jQuery DataTables.js implementation: an empty Data Table Shell on page load, filter controls that never fire a request on their own, and a Filter-button click that's the sole trigger for the first (and only the first) automatic request to a dedicated per-module `/data` JSON endpoint using DataTables' server-side processing protocol; see the "Admin Management" module's "Admin Data Table Architecture" subsection. Later the same day this was extended to the Downtime Matrix Import *Preview/show* page too — its three category tabs (Farm-to-Farm/Stationary/Others) are each their own filter-gated Data Table sharing one `rows-data` endpoint, filtered by `rule_type`; see the "Downtime Matrix PDF Import" module. Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
+This file is the primary system/business context for Claude sessions working on this repository. It is derived from the actual current implementation (read on 2026-08-26; a **Multi-Pose Face Enrollment upgrade** (Visitor Registration + Kiosk Self-Service) was added 2026-09-03 across three shipped phases — Phase A: `face_profile_embedding` child table, `FaceMatchingService::match()` (min-distance-across-poses scoring + ambiguity detection), config-driven threshold, all backward-compatible with existing single-embedding `face_profile` rows, zero user-facing behavior change; Phase B: `VisitorRegistrationService`/`KioskController` write paths switched to a generic `poses` payload (any subset of FRONT/LEFT/RIGHT, never fabricated) and `KioskController::recognize()` switched to `match()` with fail-safe-on-ambiguous handling; Phase C: the shared guided-capture frontend module `public/js/face-enrollment.js` (landmark-driven pose/position guidance, auto-capture) wired into both `capture.blade.php` and `kiosk/show.blade.php`'s Gatesale/Truck registration — **Phase D (legacy-profile backfill command, shared test factory/trait, threshold/margin recalibration) has not been done yet**; see the "Face Matching", "Visitor Registration", and "Kiosk Self-Service" module sections for full detail; the "Facility Master Data" module and its tables were added 2026-08-27 in two same-day phases — Phase 1 built the tables as dormant/parallel data, Phase 2 cut `visitor_request`/`kiosk_device`/Visitor Sync over to depend on them for real — see that module's section for exactly what is and isn't wired in; the "Downtime Matrix PDF Import" module — Phase 1, parse/validate/preview only, no production-table writes — was added 2026-08-27; its Phase 2 (added 2026-08-28) added a real "Save to Production" mapping step that writes verified imports' eligible rows into `downtime_matrix`/`downtime_stationary` (deactivating, never deleting, whatever was previously active) — see that module's section for the full mapping rules; on 2026-08-28, every admin listing under `Admin Management` (Facilities, Facility Aliases, Kiosk Devices, Identity Types, Employee Types, Downtime Matrix, Downtime Stationary, the Downtime Matrix Import *list*, Roles, Users, Audit Logs) was migrated — through two superseded intermediate approaches, both now fully removed — to a real jQuery DataTables.js implementation: an empty Data Table Shell on page load, filter controls that never fire a request on their own, and a Filter-button click that's the sole trigger for the first (and only the first) automatic request to a dedicated per-module `/data` JSON endpoint using DataTables' server-side processing protocol; see the "Admin Management" module's "Admin Data Table Architecture" subsection. Later the same day this was extended to the Downtime Matrix Import *Preview/show* page too — its three category tabs (Farm-to-Farm/Stationary/Others) are each their own filter-gated Data Table sharing one `rows-data` endpoint, filtered by `rule_type`; see the "Downtime Matrix PDF Import" module. Where the implementation was ambiguous or unverifiable from static reading, this is marked `NEEDS VERIFICATION` or `UNKNOWN` rather than guessed.
 
 **Rule for future sessions:** if you discover that code no longer matches this document, trust the code and update this document — do not silently follow stale documentation.
 
@@ -142,17 +142,17 @@ Visitor Sync
 
 ---
 
-### Module: `Visitor Registration` (Public Face/QR Self-Registration)
+### Module: `Visitor Registration` (Public Face/QR Self-Registration) — Guided Multi-Pose Capture added 2026-09-03 (Phase C)
 
 **Purpose:** Give a newly-synced visitor (holding only a `registration_token` link, e.g. from an SMS/email) a public, unauthenticated flow to register their face against their `visitor_request`, so the kiosk can recognize them later. Also resolves the "I already exist in the system" case via two alternate paths (Option A / Option B below).
 
-**Responsibilities:** Token-gated public pages; face descriptor capture and storage; duplicate-face detection with a user confirmation step; a fallback name-search + face-reverify path; QR code generation for the visitor's badge.
+**Responsibilities:** Token-gated public pages; **guided FRONT/LEFT/RIGHT** face capture and storage (as of 2026-09-03; single-frame capture before that); duplicate-face detection with a user confirmation step; a fallback name-search + face-reverify path; QR code generation for the visitor's badge.
 
 **Entry Points (all public, `routes/web.php`, no auth):**
 - `GET /register/visitor?token=...` — landing/registration page.
 - `GET /register/visitor/search?token=...` and `GET /register/visitor/search/query?q=...` — Option B name search.
-- `GET /register/visitor/capture?token=...` (page) / `POST /register/visitor/capture` — Option A: submit a face descriptor.
-- `POST /register/visitor/verify` — Option B: re-verify a face against a **specific** chosen directory.
+- `GET /register/visitor/capture?token=...` (page) / `POST /register/visitor/capture` — Option A: submit captured face pose(s).
+- `POST /register/visitor/verify` — Option B: re-verify a face against a **specific** chosen directory (still single-descriptor — see Business Rules).
 - `POST /register/visitor/confirm` — Option A: confirm/deny "is this you?" when a face already matches a different directory.
 - `GET /register/visitor/success?token=...` — final confirmation page (shows the QR).
 - `GET /register/visitor/qr?token=...[&download=1]` — streams a PNG QR code.
@@ -163,20 +163,38 @@ Visitor opens link with token
    ↓
 RegistrationController::show → validates token maps to an Approved visitor_request
    ↓
-showCapture → webcam UI (face-api.js client-side)
+showCapture → capture.blade.php: guided FRONT/LEFT/RIGHT capture UI, driven entirely by the
+              shared public/js/face-enrollment.js module (FaceEnrollment.start()) - live
+              landmark-based pose/position guidance, auto-captures each pose once the person
+              holds still in the right position for ~600ms (see "Face Matching" module's
+              sibling frontend doc below and the module's own file for exact thresholds).
+              This page no longer has a manual "Capture" button - capture is fully automatic.
    ↓
-POST captureFace {token, descriptor[128 floats], face_image}
+FaceEnrollment's onComplete(poses) fires once all 3 poses are obtained -
+   {FRONT:{descriptor,face_image}, LEFT:{...}, RIGHT:{...}} - the page's own submitEnrollment()
+   POSTs it, unchanged in shape from what the module handed back (only actually-captured poses
+   are ever included - the module never fabricates one it didn't get)
+   ↓
+POST captureFace {token, poses: {FRONT:{...}, LEFT:{...}, RIGHT:{...}}}
    ↓
 VisitorRegistrationService::completeFaceRegistrationOptionA
-   ├── FaceMatchingService::findMatch(descriptor)  [no directory filter]
-   ├── if match belongs to the SAME directory  → already_registered (no duplicate row)
+   ├── FaceMatchingService::findMatch(poses.FRONT.descriptor)  [no directory filter - dedup check
+   │      runs ONCE, on FRONT only, before any write - unchanged ordering/timing from before this
+   │      upgrade, just now sourced from the poses object instead of a bare descriptor]
+   ├── if match belongs to the SAME directory  → already_registered (no duplicate row; no new
+   │      poses are stored even if this attempt captured more poses than the existing profile has)
    ├── if match belongs to a DIFFERENT directory → face_found_different_directory
    │        ↓ visitor answers "is this you?"
    │     POST confirmMatch {confirmed: true|false}
    │        confirmed=true  → VisitorRequest.directory_id is REPOINTED to the matched directory,
-   │                           face_registration_status=REGISTERED
+   │                           face_registration_status=REGISTERED (no new FaceProfile/embedding rows)
    │        confirmed=false → markManualVerificationRequired (FAILED_MATCH, manual_verification_required=true)
-   └── if no match anywhere → create a new FaceProfile for this directory, face_registration_status=REGISTERED
+   └── if no match anywhere → ONE DB transaction: create FaceProfile (embedding/face_image populated
+          from the FRONT pose, exactly as the pre-upgrade single-pose row would have been - this is
+          what keeps the legacy columns always populated on every new enrollment, for backward
+          compatibility/rollback safety) + one FaceProfileEmbedding row per pose key actually present
+          in the payload (all-or-nothing - a failure partway through rolls back the whole enrollment,
+          never a partial 1-or-2-pose profile), face_registration_status=REGISTERED
    ↓
 success page → GET /register/visitor/qr (PNG encoding visitor_id)
 ```
@@ -196,12 +214,15 @@ VisitorRegistrationService::verifyFaceOptionB
    └── no match, attempt >= 3 → markManualVerificationRequired (FAILED_MATCH)
 ```
 
-**Data Used:** `visitor_request` (looked up by `registration_token`, never by ID directly from client input), `user_directory`, `face_profile`, `visitor_profile`.
+**Data Used:** `visitor_request` (looked up by `registration_token`, never by ID directly from client input), `user_directory`, `face_profile`, `face_profile_embedding` (new, one row per captured pose), `visitor_profile`.
 
 **Dependencies:**
 ```text
 Visitor Registration
  ├── FaceMatchingService (shared with Kiosk modules)
+ ├── public/js/face-enrollment.js (shared with Kiosk Self-Service's Gatesale/Truck registration
+ │      capture - the guided-capture state machine/detection logic lives ONLY here, both pages
+ │      just wire it up with their own DOM/submission handling)
  ├── VisitorQrCodeService (endroid/qr-code) → QR PNG generation
  └── Storage::disk('public') → face-photos/{visitor_request_id}/*.jpg
 ```
@@ -213,6 +234,10 @@ Visitor Registration
 - **Terminal failure path (both Option A "No, not me" and Option B's 3rd failed attempt) never creates or links a face profile.** It sets `face_registration_status = FAILED_MATCH` and `manual_verification_required = true` so an admin must resolve it. The visitor is told they may still use their (separately generated) QR code — QR is treated as an independent credential from face, never blocked by a face conflict.
 - `success` page redirects back to the registration page if `face_registration_status` is still `PENDING` (registration not actually completed yet).
 - QR PNG always encodes `visitor_request.visitor_id` **exactly** — this must never diverge from what the kiosk's QR scanner path expects (`VisitorQrCodeService` docblock is explicit about this single-source-of-truth constraint). Note: `visitor_request.qr_url` (received from AppSheet at sync time) is stored on the row but is **not** what's rendered/downloaded on the success page — the locally generated PNG (encoding `visitor_id`) is. `NEEDS VERIFICATION`: whether anything else in the system (or AppSheet itself) still relies on the stored `qr_url` value.
+- **Guided capture is FRONT/LEFT/RIGHT, but the write path never requires exactly 3 poses (added 2026-09-03).** `completeFaceRegistrationOptionA(VisitorRequest $visitorRequest, array $poses)` accepts any subset of `FacePose::ALL` keyed in `$poses` — `FRONT` is always required (it's the dedup key and what populates the legacy `face_profile.embedding`/`face_image` columns), `LEFT`/`RIGHT` are optional at the write-path/validation level. In normal operation the guided frontend always supplies all 3, but the backend contract is deliberately more permissive — this is what let Phase B ship and be tested with only a real FRONT capture before Phase C's guided UI existed, and it's also the general mechanism that makes "the module never fabricates a pose it didn't capture" (a hard requirement) actually enforceable server-side too.
+- **One POST carries whichever poses were captured — never 3 sequential POSTs.** This preserves the pre-upgrade "dedup check before any write" ordering exactly (now checked once against the FRONT descriptor) and keeps the whole enrollment (parent `FaceProfile` + N `FaceProfileEmbedding` rows) inside one DB transaction, all-or-nothing.
+- **`FaceEnrollment` (the shared JS module) owns capture/detection logic; this page owns submission/response handling only.** The module never performs the actual `/register/visitor/capture` fetch or interprets its response — it only calls `onComplete(poses)` once local capture finishes, then stops itself. All of the existing `already_registered`/`face_found_different_directory`/"Is this you?" response handling lives entirely in `capture.blade.php`'s own JS, unchanged in shape from before this upgrade — the module's job ends the moment it hands off the captured poses.
+- `verifyFaceOptionB()` was **not** changed by the 2026-09-03 upgrade — it never creates a new `FaceProfile`/pose rows (it only re-verifies against an *already-registered* profile), so it has no reason to need guided multi-pose capture; it still takes one plain `descriptor`.
 
 **Status Lifecycle (`visitor_request.face_registration_status`):**
 ```text
@@ -226,17 +251,18 @@ PENDING → FAILED_MATCH              (declined match, or 3rd failed Option-B at
 
 | Component | File | Responsibility |
 |---|---|---|
-| Controller | `app/Http/Controllers/Visitor/RegistrationController.php` | All public registration endpoints |
-| Service | `app/Services/VisitorRegistrationService.php` | Option A/B business logic |
-| Service | `app/Services/Face/FaceMatchingService.php` | Shared descriptor matching |
+| Controller | `app/Http/Controllers/Visitor/RegistrationController.php` | All public registration endpoints — `captureFace()` decodes/validates the `poses` object (requires `poses.FRONT.descriptor`, tolerant of any additional valid pose keys) |
+| Service | `app/Services/VisitorRegistrationService.php` | Option A/B business logic — `completeFaceRegistrationOptionA()` takes `array $poses`, writes parent+N children in one transaction |
+| Service | `app/Services/Face/FaceMatchingService.php` | Shared multi-pose-aware matching (see "Face Matching" module) |
 | Service | `app/Services/Qr/VisitorQrCodeService.php` | QR PNG rendering |
-| Views | `resources/views/visitor/{register,capture,search,success}.blade.php` | Public UI (face-api.js/jsQR loaded client-side) |
+| JS module | `public/js/face-enrollment.js` (new 2026-09-03) | Shared guided FRONT/LEFT/RIGHT capture state machine — see "Face Matching" module's sibling doc / the file itself for exact tunable thresholds (yaw proxy, centering, size, stability window) |
+| Views | `resources/views/visitor/{register,capture,search,success}.blade.php` | Public UI (face-api.js/jsQR loaded client-side); `capture.blade.php` rewritten 2026-09-03 to drive `FaceEnrollment` instead of a manual single-shot capture button |
 
-**Configuration:** None module-specific beyond shared `filesystems` (public disk) and app URL for `Storage::url()`.
+**Configuration:** `config('sentry.face.*')` (see "Face Matching" module) governs server-side matching; none of the new client-side guided-capture tuning constants (yaw thresholds, stability window, centering/size ratios) are backend-config-driven — they're plain JS constants in `face-enrollment.js`, deliberately, since they have zero effect on stored/matched data (see that module's Business Rules). Otherwise unchanged: shared `filesystems` (public disk) and app URL for `Storage::url()`.
 
-**Known Constraints:** Face matching here is a **linear scan of all active `face_profile` rows** with no directory filter for Option A's initial check — see Known Constraints under Face Matching below; this is the module most exposed to that cost since it runs on every registration attempt.
+**Known Constraints:** Face matching here is a **linear scan of all active `face_profile` rows** (now up to 3x pose-comparison volume for fully multi-pose-enrolled profiles) with no directory filter for Option A's initial check — see Known Constraints under Face Matching below; this is the module most exposed to that cost since it runs on every registration attempt. The guided-capture yaw/centering/stability thresholds in `face-enrollment.js` are reasoned starting defaults, **not calibrated against real enrollment footage** — expect a tuning pass once real usage data exists. There is **no JS test runner in this repo** (confirmed: `package.json` only lists `jquery`), so the guided-capture state machine itself has no automated test coverage — only the backend `poses` contract it feeds into is tested (`tests/Feature/Visitor/VisitorRegistrationTest.php`).
 
-**Important Notes for Future Changes:** Do not let Option A/B create a `face_profile` before confirming there's no existing match — the current ordering (match-check first, create second) is what prevents duplicate face rows for the same person. Do not change the QR payload to anything other than the raw `visitor_id` without also updating the kiosk's QR decode expectations.
+**Important Notes for Future Changes:** Do not let Option A/B create a `face_profile` before confirming there's no existing match — the current ordering (match-check first, create second) is what prevents duplicate face rows for the same person; this is unchanged by the multi-pose upgrade, just now checked against the FRONT pose specifically. Do not change the QR payload to anything other than the raw `visitor_id` without also updating the kiosk's QR decode expectations. Do not have `completeFaceRegistrationOptionA()` require exactly 3 pose keys — the generic "however many were captured" contract is deliberate (see Business Rules) and is what Phase D's eventual work (or any future capture-flow variant) can keep relying on without another backend change. If you ever change `face-enrollment.js`'s tunable constants, do it in that one file (`FaceEnrollment.config`) — both this page and Kiosk Self-Service's registration screen inherit the change automatically.
 
 ---
 
@@ -263,7 +289,11 @@ VerifyKioskToken middleware  (X-KIOSK-TOKEN header → KioskDevice lookup, attac
 POST /recognize {descriptor} or {qr_value}
    ↓
 KioskController::recognize
-   ├── FaceMatchingService::findMatch (unscoped) OR direct visitor_id lookup for QR
+   ├── FaceMatchingService::match (unscoped) OR direct visitor_id lookup for QR — as of 2026-09-03,
+   │      recognize() reads the richer match() result directly rather than findMatch(): an AMBIGUOUS
+   │      result is treated exactly like NO_MATCH (fails safe to the existing face_not_found 404
+   │      branch below) since unattended recognition has no human-in-the-loop step to resolve an
+   │      uncertain guess — see "Face Matching" module for the full scoring/ambiguity design
    ├── routeByIdentity() — Employee → placeholder; non-Visitor → unsupported;
    │                        Gatesale/Truck → handleSelfServiceRecognition() (separate module below);
    │                        plain Visitor → continue below
@@ -311,6 +341,7 @@ Kiosk Entry
 - `pickBestActiveRequest` ordering is intentional and load-bearing: non-completed requests outrank completed ones, which outrank a plain "most recent" tiebreak — this exists specifically so a stale COMPLETED request for the kiosk's own farm never masks a genuinely active request at a *different* farm (the correct message must be "wrong farm," not "already completed").
 - `authentication_method` accepts only the literal strings `FACE` or `QR`; anything else silently defaults to `FACE`.
 - Google Sheets writes for `first_entry`/`final_exit` are **best-effort and non-blocking** — a Sheets failure never fails the kiosk transaction; it's only logged (`\Log::error`).
+- **Face recognition fails safe on an ambiguous match (added 2026-09-03):** `recognize()` uses `FaceMatchingService::match()` and treats `AMBIGUOUS` identically to `NO_MATCH` — the visitor is told to try their QR code rather than the kiosk guessing between two similarly-scored profiles. This only matters once a directory has multiple biometric samples (multi-pose enrollment) or two people's descriptors happen to score close together; it never changes behavior for a clean single-match case.
 
 **Status Lifecycle:**
 ```text
@@ -342,7 +373,7 @@ VISITOR_SESSION.session_status:      (none) → Inside → Outside ⇄ Inside �
 
 ---
 
-### Module: `Kiosk Self-Service` (Gatesale & Truck)
+### Module: `Kiosk Self-Service` (Gatesale & Truck) — Guided Multi-Pose Capture added 2026-09-03 (Phase C)
 
 **Purpose:** Let two specific visitor types — **Gatesale** (walk-in customers buying directly at the farm gate) and **Truck** (delivery/pickup drivers) — register themselves and start a visit **entirely at the kiosk**, with no upstream AppSheet approval and no separate registration link. Both types share one implementation; Truck differs only by requiring/displaying a Plate No.
 
@@ -374,22 +405,40 @@ handleSelfServiceRecognition()
 
 **Brand-new person (no face match at all):**
 ```text
-POST gatesale/register-identity {visitor_type: Gatesale|Truck, full_name, company, descriptor, email?, phone?, plate_no?}
+Kiosk "Registration" button (shown on face_not_found) → startGatesaleRegistration()
    ↓
-FaceMatchingService::findMatch (unscoped, re-checked to avoid a duplicate on a flaky retry)
+public/js/face-enrollment.js: FaceEnrollment.start() runs against a DEDICATED #enrollment-webcam
+   <video> element fed by the SAME MediaStream as the main recognition loop's #webcam - NOT a
+   second getUserMedia() call, so there's no camera-lock conflict. The main continuous recognition
+   loop is paused for the duration via the pre-existing currentState = STATES.PROCESSING convention
+   this file already used for every other multi-step Gatesale screen - the loop's own code
+   (detectionTick/runDetectionCycle/attemptFaceRecognition) was NOT modified for this feature.
+   ↓
+onComplete(poses) fires once FRONT+LEFT+RIGHT are all captured → shows the existing identity-details
+   form (Name/Company/etc) exactly as before, now holding all 3 real poses instead of one descriptor
+   ↓
+POST gatesale/register-identity {visitor_type: Gatesale|Truck, full_name, company, poses: {FRONT:{...}, LEFT:{...}, RIGHT:{...}}, email?, phone?, plate_no?}
+   ↓
+FaceMatchingService::findMatch(poses.FRONT.descriptor)  [unscoped, re-checked to avoid a duplicate on
+   a flaky retry - dedup runs once, against FRONT only, before any write, exactly as before this upgrade]
    ├── match found + is a Gatesale/Truck directory  → handleSelfServiceRecognition() (as above — do not create a duplicate)
    ├── match found + NOT Gatesale/Truck              → 422 identity_not_supported (no conversion, no duplicate profile)
-   └── no match  → DB::transaction: UserDirectory::create + VisitorProfile::create(visitor_type, company, plate_no if Truck) + FaceProfile::create
+   └── no match  → DB::transaction: UserDirectory::create + VisitorProfile::create(visitor_type, company, plate_no if Truck)
+          + FaceProfile::create(embedding from FRONT, exactly as the pre-upgrade single-pose row would
+          have been) + one FaceProfileEmbedding row per pose key actually present in the payload (never
+          fabricated - this path still never stores a face_image, unchanged from before this upgrade)
                         ↓
                   returns directory payload (registration only — no visit/session/entry_log yet)
 ```
 
-**Data Used:** `user_directory`, `visitor_profile` (`visitor_type_id`, `company`, `plate_no`), `face_profile`, `visitor_request` (`origin` column is Gatesale/Truck/general-purpose, but `registration_token` is left `null` for self-service requests since there's no registration link), `facility_list` (via `visitor_request.facility_id`/`kiosk_device.facility_id`, renamed from `farm_id`/`farm_list` on 2026-08-27), cache locks (`cache_locks` table, `CACHE_STORE=database`).
+**Data Used:** `user_directory`, `visitor_profile` (`visitor_type_id`, `company`, `plate_no`), `face_profile`, `face_profile_embedding` (new 2026-09-03, one row per captured pose), `visitor_request` (`origin` column is Gatesale/Truck/general-purpose, but `registration_token` is left `null` for self-service requests since there's no registration link), `facility_list` (via `visitor_request.facility_id`/`kiosk_device.facility_id`, renamed from `farm_id`/`farm_list` on 2026-08-27), cache locks (`cache_locks` table, `CACHE_STORE=database`).
 
 **Dependencies:**
 ```text
 Kiosk Self-Service
  ├── Shared with Kiosk Entry: FaceMatchingService, VisitorKioskService::processEntry, buildRecognitionResponse, pickBestActiveRequest
+ ├── public/js/face-enrollment.js (new 2026-09-03, shared with Visitor Registration's capture.blade.php
+ │      — see that module and "Face Matching" for the guided-capture design)
  ├── Cache::lock() (database-backed) — concurrency guard, keyed by directory_id only
  └── VisitorType 'Gatesale' / 'Truck' rows (NOT seeded anywhere in database/seeders — see Known Constraints)
 ```
@@ -405,6 +454,9 @@ Kiosk Self-Service
 - Plate No. is required (and editable) **only** for Truck; Gatesale ignores it entirely and it is always stored as `null`.
 - `resolveSelfServiceDirectoryOrFail` never trusts a client-supplied `directory_id` — it re-validates `is_active`, identity type = Visitor, and visitor type ∈ {Gatesale, Truck} on every call across all three self-service endpoints.
 - `update-details` can only ever change the visitor's own contact/profile fields (`full_name`, `email`, `phone`, `company`, `plate_no` for Truck) — never `directory_id`, `identity_type_id`, or `visitor_type_id`. It never creates a request/session on its own.
+- **`gatesaleRegisterIdentity()` takes a generic `poses` object (added 2026-09-03), same contract as Visitor Registration's `completeFaceRegistrationOptionA()`** — `FRONT` required, `LEFT`/`RIGHT` optional at the write-path level, never fabricated if genuinely absent. See "Face Matching" and "Visitor Registration" modules for the shared design (min-distance scoring, ambiguity, the `FaceEnrollment` frontend module).
+- **The guided capture screen reuses the kiosk's already-open camera stream — it never calls `getUserMedia()` a second time.** `startGatesaleRegistration()` assigns the same `stream` object (acquired once, in `initialize()`) to a second, dedicated `<video id="enrollment-webcam">` element and runs `FaceEnrollment` against *that* element; the main recognition loop keeps running its own detection against the original `#webcam` element, just paused (via `currentState = STATES.PROCESSING`, the same convention every other multi-step Gatesale screen in this file already used) for the duration. This is a deliberate design choice so the continuous recognition loop's own code never has to be touched to support guided registration capture.
+- **The 30-second Gatesale idle-abandonment timer (`GATESALE_IDLE_TIMEOUT_MS`) is reset on genuine guided-capture progress but not on empty/no-face polling** — `onGatesaleEnrollmentStateChange()` only calls `startGatesaleIdleTimer()` again when the module's state is anything other than `DETECTING_FACE`, so a person actively working through the guided flow won't get timed out mid-capture, while a kiosk truly abandoned mid-registration still recovers automatically. The timer's callback also stops any in-flight `FaceEnrollment` controller before returning to `main-view`, to avoid leaving a dangling detection loop running against the hidden `#enrollment-webcam` element.
 
 **Status Lifecycle:** Same `request_status`/`session_status` values as Kiosk Entry (ACTIVE → COMPLETED / COMPLETED_AUTO / INCOMPLETE via the scheduled job).
 
@@ -414,50 +466,69 @@ Kiosk Self-Service
 
 | Component | File | Responsibility |
 |---|---|---|
-| Controller | `app/Http/Controllers/Kiosk/KioskController.php` | `gatesaleUpdateDetails`, `gatesaleCreateVisit`, `gatesaleRegisterIdentity`, `routeByIdentity`, `handleSelfServiceRecognition`, `createGatesaleVisit` (same file as Kiosk Entry) |
+| Controller | `app/Http/Controllers/Kiosk/KioskController.php` | `gatesaleUpdateDetails`, `gatesaleCreateVisit`, `gatesaleRegisterIdentity` (takes `poses` as of 2026-09-03), `routeByIdentity`, `handleSelfServiceRecognition`, `createGatesaleVisit`, `recognize` (uses `match()` as of 2026-09-03) (same file as Kiosk Entry) |
 | Model | `app/Models/VisitorProfile.php` | `visitor_type_id`/`company`/`plate_no` — sole source of truth for this data |
 | Model | `app/Models/VisitorRequest.php` | `isGatesale()`, `isTruck()`, `isExcludedFromGoogleSheets()` |
+| JS module | `public/js/face-enrollment.js` (new 2026-09-03) | Shared guided-capture logic — wired into `kiosk/show.blade.php`'s `startGatesaleRegistration()`/`onGatesaleEnrollmentComplete()` against a dedicated `#enrollment-webcam` element; the main recognition loop's own code is untouched |
 
 **Configuration:** None specific; relies on the same `CACHE_STORE=database` used app-wide.
 
-**Known Constraints:** **`VisitorType` rows for "Gatesale" and "Truck" (and "Visitor") are not created by any seeder** (`database/seeders/` has no `VisitorTypeSeeder`) and there is **no admin CRUD controller for `VisitorType`** either (unlike `IdentityType`/`EmployeeType`, which both have full admin UIs). `NEEDS VERIFICATION`: how these rows are provisioned in a real deployment — likely manual DB insert or `tinker`, since tests create them ad hoc (`VisitorType::create(['visitor_type_name' => 'Gatesale'])`). This is a real operational gap worth flagging if asked to touch onboarding/setup.
+**Known Constraints:** **`VisitorType` rows for "Gatesale" and "Truck" (and "Visitor") are not created by any seeder** (`database/seeders/` has no `VisitorTypeSeeder`) and there is **no admin CRUD controller for `VisitorType`** either (unlike `IdentityType`/`EmployeeType`, which both have full admin UIs). `NEEDS VERIFICATION`: how these rows are provisioned in a real deployment — likely manual DB insert or `tinker`, since tests create them ad hoc (`VisitorType::create(['visitor_type_name' => 'Gatesale'])`). This is a real operational gap worth flagging if asked to touch onboarding/setup. Same guided-capture tuning/no-JS-test-runner caveats noted under "Visitor Registration" apply here too, since both pages share the identical `face-enrollment.js` module.
 
-**Important Notes for Future Changes:** Do not scope the "one active request" check by farm or date — it is deliberately global-and-status-only. Do not change the `Cache::lock()` key to include farm — that would reopen the cross-farm race it was added to close. If you add a new self-service visitor type, it must flow through `handleSelfServiceRecognition`/`resolveSelfServiceDirectoryOrFail`, not a parallel implementation.
+**Important Notes for Future Changes:** Do not scope the "one active request" check by farm or date — it is deliberately global-and-status-only. Do not change the `Cache::lock()` key to include farm — that would reopen the cross-farm race it was added to close. If you add a new self-service visitor type, it must flow through `handleSelfServiceRecognition`/`resolveSelfServiceDirectoryOrFail`, not a parallel implementation. Do not duplicate `face-enrollment.js`'s guided-capture logic inline in this file — if the kiosk registration UX ever needs to diverge from the visitor-registration one, extend the shared module's options/callbacks rather than forking it.
 
 ---
 
-### Module: `Face Matching` (shared service)
+### Module: `Face Matching` (shared service) — Multi-Pose Upgrade (Phases A–C added 2026-09-03; Phase D not done)
 
-**Purpose:** Single shared implementation of "does this face descriptor match a known person," used by Visitor Registration, Kiosk Entry, and Kiosk Self-Service alike, so matching logic/threshold never drifts between call sites.
+**Purpose:** Single shared implementation of "does this face descriptor match a known person," used by Visitor Registration, Kiosk Entry, and Kiosk Self-Service alike, so matching logic/threshold never drifts between call sites. As of the 2026-09-03 upgrade, a person may have **one or more** biometric samples (poses) rather than exactly one — this module is the one place that scoring logic lives, so every caller inherits it automatically.
 
-**Responsibilities:** Compare a client-supplied 128-float face descriptor against stored `face_profile.embedding` rows (optionally scoped to one directory) using Euclidean distance.
+**Current status:** Phase A (child table + scoring algorithm), Phase B (all 4 call sites switched over), and Phase C (guided multi-pose capture frontend, see Visitor Registration/Kiosk Self-Service) have shipped. **Phase D has not shipped**: there is no backfill command yet to give existing legacy `face_profile` rows an explicit `face_profile_embedding` child row (they still match correctly without one — see Business Rules — this is a data-tidiness/future-reporting gap, not a correctness gap), no shared `FaceProfileFactory`/`CreatesFaceProfiles` test trait (each test file still hand-rolls its own `descriptor()` helper, unchanged from before this upgrade), and the ambiguity margin (`0.08`) has not been recalibrated against any real distance-distribution data.
 
-**Entry Points:** Not HTTP-facing — a plain service class (`App\Services\Face\FaceMatchingService::findMatch(array $descriptor, ?int $onlyDirectoryId = null, float $threshold = 0.6)`), injected into the controllers/services listed above.
+**Responsibilities:** Compare a client-supplied 128-float face descriptor against a profile's stored biometric sample(s) — one legacy `face_profile.embedding` value, or one-to-several `face_profile_embedding` rows (pose = FRONT/LEFT/RIGHT) — using Euclidean distance, with ambiguity detection across competing profiles.
 
-**Main Flow:**
+**Entry Points:** Not HTTP-facing — a plain service class, `App\Services\Face\FaceMatchingService`, injected into the controllers/services listed above. Two public methods:
+- `match(array $descriptor, ?int $onlyDirectoryId = null, ?float $threshold = null, ?float $ambiguityMargin = null): FaceMatchResult` — the real entry point as of this upgrade; `$threshold`/`$ambiguityMargin` default from `config('sentry.face.match_threshold')`/`config('sentry.face.ambiguity_margin')` when not passed.
+- `findMatch(array $descriptor, ?int $onlyDirectoryId = null, ?float $threshold = null): ?FaceProfile` — a **backward-compatible thin wrapper** around `match()`: both `MATCH` and `AMBIGUOUS` collapse to "return the top candidate profile," `NO_MATCH` returns `null`. This preserves the exact pre-upgrade contract/behavior for any caller that hasn't been updated to read `AMBIGUOUS` explicitly (none remain in this codebase today, but the wrapper is kept as the documented backward-compat guarantee for the method).
+
+**Main Flow (`match()`):**
 ```text
-findMatch(descriptor, onlyDirectoryId?, threshold=0.6)
+match(descriptor, onlyDirectoryId?, threshold?, ambiguityMargin?)
    ↓
-FaceProfile::where('is_active', true) [+ where directory_id = onlyDirectoryId if given]
+threshold ??= config('sentry.face.match_threshold', 0.6)     [default unchanged from before this upgrade]
+ambiguityMargin ??= config('sentry.face.ambiguity_margin', 0.08)
    ↓
-for each stored profile: skip if embedding length mismatches descriptor length
+FaceProfile::where('is_active', true) [+ where directory_id = onlyDirectoryId if given], eager-loads embeddings()
    ↓
-Euclidean distance (plain PHP loop, not a vector library)
+for each profile: bestDistanceForProfile()
+   ├── profile HAS face_profile_embedding rows → min distance across only those rows (its own legacy
+   │      `embedding` column is ignored once children exist — children are the sole source of truth)
+   └── profile has NO children (legacy/partial)  → falls back to its own `embedding` column as one implicit pose
    ↓
-first profile with distance <= threshold wins (no "best of all" ranking — first hit under threshold returns immediately)
+track the single best (lowest-distance) and runner-up (2nd-lowest, a DIFFERENT profile) across all profiles
+   ↓
+best === null OR best.distance > threshold           → NO_MATCH
+best.distance <= threshold AND (no runner-up OR runner-up.distance - best.distance >= ambiguityMargin)  → MATCH
+best.distance <= threshold AND runner-up.distance - best.distance <  ambiguityMargin                     → AMBIGUOUS
 ```
 
-**Data Used:** `face_profile` (`embedding` JSON-cast array, `is_active`).
+**Data Used:** `face_profile` (`embedding` JSON-cast array, `is_active` — legacy/fallback pose), `face_profile_embedding` (`face_profile_id` FK, `pose` string, `embedding` JSON-cast array, `face_image`, `face_version` — the per-pose child rows a multi-pose enrollment creates; **no `is_active` of its own**, activation is the parent `face_profile.is_active` only).
 
-**Dependencies:** None external — pure PHP/Eloquent.
+**Dependencies:** None external — pure PHP/Eloquent. New in this upgrade: `App\Services\Face\FacePose` (plain string constants `FRONT`/`LEFT`/`RIGHT` — a plain class, **not** a PHP enum, since this codebase has zero native enum usage anywhere else and every comparable closed-string-set, e.g. `request_status`, is a plain string) and `App\Services\Face\FaceMatchResult` (readonly result DTO: `status` ∈ `MATCH`/`AMBIGUOUS`/`NO_MATCH`, `profile`, `distance`, `runnerUpDistance`).
 
-**Related Modules:** Consumed by Visitor Registration, Kiosk Entry, Kiosk Self-Service.
+**Related Modules:** Consumed by Visitor Registration, Kiosk Entry, Kiosk Self-Service — all 4 call sites (`KioskController::recognize()`, `KioskController::gatesaleRegisterIdentity()` dedup check, `VisitorRegistrationService::completeFaceRegistrationOptionA()` dedup check, `VisitorRegistrationService::verifyFaceOptionB()`) were updated in Phase B to call `match()`/`findMatch()` against the new scoring, each with its own deliberate `AMBIGUOUS` handling (see those modules' Business Rules) — none of the 4 needed a request/response shape change, only their internal matching call.
 
-**Business Rules:** Threshold is a fixed default `0.6` (the `face-api.js` convention for 128-D descriptors) — callable with a different threshold but nothing in the codebase currently overrides it. Returns `null` immediately for a non-array/empty descriptor, or for any stored embedding whose length doesn't match the incoming descriptor's length.
+**Business Rules:**
+- **Scoring is minimum Euclidean distance across a profile's available poses**, not an average — the question being answered is "does this face match *any* previously-seen pose of this person," not their average appearance. This is a deliberate choice: averaging would let one mediocre pose capture drag down an otherwise-excellent match on a different pose.
+- **A profile with `face_profile_embedding` rows uses ONLY those rows for scoring — its own legacy `embedding` column is ignored the moment children exist.** A profile with **zero** children is, by construction, a legacy/partial enrollment, and is matched via its own `embedding` column as an implicit single pose — this is what makes every pre-upgrade `face_profile` row (and any Phase-B-era FRONT-only enrollment, until Phase C's guided capture is used) remain fully, permanently matchable with zero special-casing. There is **no requirement that a profile ever have LEFT/RIGHT poses** — `config('sentry.face.min_enrolled_poses')` (default `1`) exists only as a future admin-reporting hook, not a matching gate.
+- **Ambiguity is a cross-profile concept only.** A directory-scoped lookup (`onlyDirectoryId` set — used by `verifyFaceOptionB()`) can structurally never produce `AMBIGUOUS`, since a directory has at most one `face_profile` row; multiple close-together poses *within* that one profile just collapse correctly via min-distance, never trigger ambiguity.
+- **`AMBIGUOUS` handling is deliberately different per call site**, not a single blanket rule: `KioskController::recognize()` fails safe (treated as `NO_MATCH`, since unattended recognition has no human-in-the-loop step to resolve an uncertain guess); both dedup checks (`gatesaleRegisterIdentity()`, `completeFaceRegistrationOptionA()`) treat it as `MATCH` (routing into the existing `gatesale_confirm_identity`/`face_found_different_directory` human-confirmation flows that already exist for exactly this purpose, rather than either silently creating a duplicate or silently auto-linking).
+- **Threshold (`0.6`) and ambiguity margin (`0.08`) are both config-driven** (`config('sentry.face.match_threshold')`/`config('sentry.face.ambiguity_margin')`, env `FACE_MATCH_THRESHOLD`/`FACE_AMBIGUITY_MARGIN`), not hardcoded class constants as before — but the `0.6` threshold's *default value* was deliberately preserved unchanged during this upgrade. The `0.08` margin is a new, **unverified starting guess** (flagged explicitly, not measured against real distance-distribution data) — recommend logging `distance`/`runnerUpDistance` on every `AMBIGUOUS`/near-threshold result to recalibrate once real usage data exists (this is exactly the Phase D work that hasn't happened yet).
+- Returns `NO_MATCH`/`null` immediately for a non-array/empty descriptor, or for any stored embedding whose length doesn't match the incoming descriptor's length (unchanged from before this upgrade — this is what makes the service length-agnostic rather than hardcoded to 128 dimensions).
 
-**Known Constraints:** **Linear scan over every active `face_profile` row, per call, in PHP** — no vector index/ANN, no DB-side distance computation. Acceptable at current data scale (per prior implementation notes) but will degrade linearly as the visitor directory grows. Any future change here should consider this before adding more call sites that invoke it per-frame or per-second.
+**Known Constraints:** **Linear scan over every active `face_profile` row (and now, up to 3x that in pose-comparison volume for fully-migrated profiles), per call, in PHP** — no vector index/ANN, no DB-side distance computation. At 10,000 profiles this is ~30,000 pose comparisons per unscoped call in the worst case (all fully migrated) — still comfortably sub-second (a handful of MFLOPs), so a linear scan remains acceptable at current/anticipated scale; do not introduce a vector DB/ANN prematurely. Any future change here should consider this cost before adding more call sites that invoke `match()`/`findMatch()` per-frame or per-second.
 
-**Important Notes for Future Changes:** Do not duplicate this matching logic anywhere else. If matching quality/threshold ever needs to change, change it here — every module inherits the update automatically.
+**Important Notes for Future Changes:** Do not duplicate this matching logic anywhere else. If matching quality/threshold/margin ever needs to change, change it here (or its config keys) — every module inherits the update automatically. Do not add a compatibility shim for `FaceProfile::embedding`/`face_image` reads elsewhere in the app — grep confirms only this service, `VisitorRegistrationService`, `KioskController`, and the model itself ever read those columns, so none is needed. If you add a new call site, decide its `AMBIGUOUS` handling deliberately (fail-safe-to-no-match vs. route-to-human-confirmation) rather than defaulting to `findMatch()`'s collapse-to-top-candidate behavior without thinking about it.
 
 ---
 
@@ -1218,7 +1289,9 @@ identity_type ──┐
 employee_type ──┘         │           │        │
                            │           │        └──▶ visitor_type (Visitor/Gatesale/Truck — NOT admin-managed, see gap noted above)
                            │           │
-                           │           ├──▶ face_profile (embedding[], is_active)
+                           │           ├──▶ face_profile (embedding[]*, is_active) ──▶ face_profile_embedding
+                           │           │        (*legacy/fallback pose - see entity notes; face_profile_embedding
+                           │           │         is the new 2026-09-03 child table, one row per FRONT/LEFT/RIGHT pose)
                            │           │
                            │           └──▶ visitor_request ──┬──▶ facility_list (was farm_list until 2026-08-27 cutover)
                            │                     │              │
@@ -1258,7 +1331,8 @@ downtime_matrix_imports ──▶ downtime_matrix_import_rows ──▶ facility
 
 - **`user_directory`** — Purpose: the canonical "person" record (visitor, employee, contractor, etc.). Key: `directory_id`. Notable columns: `identity_type_id` (required FK — drives `routeByIdentity()`'s branching), `person_reference` (a synthetic uniqueness key, not always email), `full_name`/`email`/`phone`. **Created by:** Visitor Sync, Visitor Registration (indirectly, via directory-reuse), Kiosk Self-Service registration. **Updated by:** Kiosk Self-Service `update-details`, Visitor Registration (face-link confirmation repoints `visitor_request.directory_id`, not this table). **Read by:** everything. As of migration `2026_08_12_115846`, `visitor_type_id`/`company`/`plate_no` were **removed** from this table and now live exclusively on `visitor_profile` — if you see old code/docs referencing those columns directly on `UserDirectory`, they are stale.
 - **`visitor_profile`** — Purpose: visitor-specific attributes, 1:1 with `user_directory` (unique `directory_id`). **Sole source of truth** for `visitor_type_id`/`company`/`plate_no` since the migration above. Cascade-deletes with its directory.
-- **`face_profile`** — Purpose: one or more biometric templates per directory. Key: `face_profile_id`. `embedding` is a JSON array of floats (128-D, `face-api.js` convention). `is_active` gates whether `FaceMatchingService` considers it.
+- **`face_profile`** — Purpose: the identity-level face record for one directory. Key: `face_profile_id`. `embedding`/`face_image` are a JSON array of floats (128-D, `face-api.js` convention) and an optional stored photo — as of the 2026-09-03 multi-pose upgrade these are the **FRONT pose specifically**, still populated on every new enrollment for backward compatibility, but **superseded** by `face_profile_embedding` child rows the moment any exist (see below). `is_active` gates whether `FaceMatchingService` considers this profile at all (parent-level only — child rows have no `is_active` of their own). `face_version` unchanged (`'1.0'`, always). Zero schema change was made to this table during the upgrade — it was deliberately kept exactly as-is so every pre-upgrade row, and every test that constructs one directly, keeps working with no special-casing.
+- **`face_profile_embedding`** (new table, 2026-09-03, Multi-Pose Face Enrollment upgrade Phase A) — Purpose: one biometric sample per captured pose, child of `face_profile`. Key: `face_profile_embedding_id`. Columns: `face_profile_id` (FK, cascade-delete), `pose` (string: `FRONT`/`LEFT`/`RIGHT`, plain string not a PHP enum — matches this codebase's existing convention for every other closed-string-set), `embedding` (JSON array of floats, same 128-D convention as `face_profile.embedding`), `face_image`, `face_version`, unique `(face_profile_id, pose)`. **A `face_profile` row with zero children is a legacy/partial enrollment**, matched via its own `embedding` column as an implicit single pose — this is the backward-compatibility mechanism, not a special case in code. Created by: `VisitorRegistrationService::completeFaceRegistrationOptionA()` and `KioskController::gatesaleRegisterIdentity()`, one row per pose key actually present in the submitted `poses` payload (never fabricated — a partial submission just yields fewer rows). Read by: `FaceMatchingService::match()`/`findMatch()` (eager-loaded, min-distance-across-poses scoring). **Not `Auditable`** (deliberately — an enrollment already produces one audit row via the parent `FaceProfile`; auditing every child row too would be a 3-4x volume increase for no compliance value, mirroring the precedent already set by Downtime Matrix Import's bulk-write audit trade-off). No Artisan backfill command exists yet to give pre-upgrade `face_profile` rows an explicit child row (Phase D, not done) — not required for correctness, since matching already falls back to the parent's own `embedding` column.
 - **`visitor_request`** — Purpose: one specific approved (or self-service) visit. Key: `visitor_request_id`. Status fields: `approval_status` (`Approved` is the only value seen in code — no rejection/pending flow implemented for the Sync path), `request_status` (`ACTIVE`/`COMPLETED`/`COMPLETED_AUTO`/`INCOMPLETE`), `face_registration_status` (`PENDING`/`REGISTERED`/`FAILED_MATCH`). `visitor_id` is the AppSheet-issued idempotency key and QR payload (nullable — self-service requests have none). `registration_token` nullable (self-service requests have none). **Created by:** Visitor Sync, Kiosk Self-Service. **Updated by:** Kiosk Entry (`processEntry`), Session Auto-Resolution, Visitor Registration (re-pointing `directory_id` on a confirmed match). As of migration `2026_08_27_120001`, its site-binding column is `facility_id` (FK → `facility_list.facility_id`, `RESTRICT` on delete) — **not** `farm_id`/`farm_list` anymore; `facility()` replaces the old `farm()` relation.
 - **`visitor_session`** — Purpose: one physical "inside the farm" episode per request (a request can have more than one session over its lifetime, e.g. multiple temporary-exit/return cycles do NOT create new sessions — a session persists across those; only `final_exit`/auto-resolution closes it). Key: `visitor_session_id`. `login_id`/`logout_id` are independently generated 8-char codes, never assumed equal, unique across the whole table (checked against both columns to avoid cross-collision).
 - **`visitor_entry_logs`** — Purpose: immutable append-only log of every individual movement event (`First Entry`/`Temporary Exit`/`Return`/`Final Exit`, each with `IN`/`OUT` + timestamp + optional photo). No `updated_at` (`$timestamps = false`). Never updated after creation, only inserted.
@@ -1365,6 +1439,9 @@ Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`dest
 | `FILESYSTEM_DISK` | Default disk (kiosk/face photos use the explicit `public` disk regardless of this default) | Kiosk Entry, Visitor Registration | Laravel core / `Storage` |
 | `APP_URL` | Base URL — required for the `public` disk's photo URLs used in Sheets writes | Google Sheets Integration | `Storage::disk('public')->url()` |
 | `CACHE_STORE` | Must be `database` (or another store supporting `Cache::lock()`) for the Gatesale/Truck concurrency guard to function | Kiosk Self-Service | `Cache::lock()` |
+| `FACE_MATCH_THRESHOLD` | Euclidean-distance match threshold (default `0.6`, unchanged value from the pre-2026-09-03 hardcoded constant — now config-driven) | Face Matching | `FaceMatchingService::match()`/`findMatch()` via `config('sentry.face.match_threshold')` |
+| `FACE_AMBIGUITY_MARGIN` | New 2026-09-03 — minimum distance gap required between the best and runner-up candidate before a match is considered unambiguous (default `0.08`, an **unverified starting guess**, not calibrated against real data) | Face Matching | `FaceMatchingService::match()` via `config('sentry.face.ambiguity_margin')` |
+| `FACE_MIN_ENROLLED_POSES` | New 2026-09-03 — default `1`, **permanent not transitional**: legacy/single-pose profiles remain valid matches forever; this key exists only as a future admin-reporting hook (e.g. "flag incomplete profiles"), it does not gate matching itself | Face Matching | reserved, not yet read anywhere outside config |
 
 (No secret values are reproduced here — only names/purposes, per documentation policy.)
 
@@ -1394,6 +1471,10 @@ Standard Laravel resource routes (`index`/`create`/`store`/`edit`/`update`/`dest
 21. **Every farm gets a Farm-to-Farm row to "LEP, DC" (DC Warehouses) even when that PDF cell is blank** — configured via `always_include_as_farm_destination` in `config('downtime_matrix_import.facility_groups')`. A blank cell there means no downtime is required, not missing data: the synthesized row carries `minimum_downtime`/`maximum_downtime = null` and an `INFO`-tier message, never `UNMATCHED`/`INVALID`. This is currently scoped only to "LEP, DC" — do not generalize it to every non-farm destination without being asked.
 19. **Downtime Matrix PDF Import classifies every row into exactly one of three categories — `FARM_TO_FARM` / `STATIONARY` / `OTHERS` — never a "doesn't fit" case:** `STATIONARY` requires the recognized "Outside" sentinel origin paired with a farm destination (mirrors `downtime_stationary`'s one-rule-per-farm production shape); `FARM_TO_FARM` requires the origin itself to be farm-like (a real farm or the "LEP, DC" group), not just the destination; everything else (e.g. "Organikultura Area", "Fabrication") is `OTHERS`, a real category shown in its own Preview tab, not an error state.
 22. **Save to Production (`VERIFIED → PRODUCED`) is confirmation-gated and maps only `VALID`/`WARNING` staging rows into `downtime_matrix`/`downtime_stationary` — `UNMATCHED`/`AMBIGUOUS`/`INVALID` rows are always skipped, never mapped.** The "Production" action (on the import list and, added the same day, on the import's own Preview page once `VERIFIED`) only routes to the confirmation step, never directly to production. `DowntimeMatrixImportService::produce()` runs the whole mapping inside one `DB::transaction()`, using only bulk writes (`upsert()` for the new configuration, `where()->update()` for deactivating the prior one — never a per-row Eloquent loop, since that was tried first and caused a real 60-second-timeout failure against a production-sized import) before stamping `status`/`produced_by`/`produced_at`. Any exception rolls the whole thing back automatically and leaves the import `VERIFIED`, not partially `PRODUCED` — though note a PHP execution-timeout fatal specifically is *not* catchable by `produce()`'s own try/catch (it still rolls back via the dropped DB connection, just without a graceful `{success:false}` response), which is exactly why the bulk rewrite exists — to make hitting that timeout in the first place highly unlikely. Do not revert the bulk writes back to per-row `updateOrCreate()`/`create()` — see that module's Business Rules for the full incident and the resulting audit-logging trade-off (individual production rows are no longer audit-logged; the parent import's own `produced_by`/`produced_at` still is).
+23. **Face matching scores a profile by the minimum Euclidean distance across all of its available biometric poses, never an average** (Face Matching, added 2026-09-03) — a profile with `face_profile_embedding` child rows is scored only against those; a profile with none falls back to its own legacy `face_profile.embedding` column as an implicit single pose. Do not average distances across poses — this would let a mediocre pose capture drag down an otherwise-strong match on a different pose.
+24. **A face enrollment write path never fabricates a pose it wasn't given** (Visitor Registration / Kiosk Self-Service, added 2026-09-03) — `completeFaceRegistrationOptionA()`/`gatesaleRegisterIdentity()` create exactly one `FaceProfileEmbedding` row per pose key actually present in the submitted `poses` object (`FRONT` required, `LEFT`/`RIGHT` optional); a partial submission simply yields fewer rows, never a synthesized/duplicated one.
+25. **Face-match ambiguity handling is deliberately different per call site, not a blanket rule** (Face Matching, added 2026-09-03) — `KioskController::recognize()` fails safe (an `AMBIGUOUS` result is treated as `NO_MATCH`, since unattended recognition has no human-in-the-loop step); the two dedup checks (`gatesaleRegisterIdentity()`, `completeFaceRegistrationOptionA()`) treat `AMBIGUOUS` as a `MATCH`, routing into the existing human-confirmation flows (`gatesale_confirm_identity`/`face_found_different_directory`) that already exist for exactly this purpose. Do not default a new call site to one behavior without deciding this deliberately.
+26. **Legacy single-embedding `face_profile` rows must remain matchable forever, with no forced migration/backfill** (Face Matching, added 2026-09-03) — `config('sentry.face.min_enrolled_poses')` (default `1`) is a permanent value, not transitional; there is no requirement, now or planned, that every profile eventually have 3 poses.
 
 ---
 
@@ -1454,7 +1535,7 @@ Owning module: Downtime Matrix PDF Import. `PENDING_VERIFICATION → CANCELLED` 
 
 ## 12. Performance and Technical Constraints
 
-- **Face matching is a linear PHP-side scan** (`FaceMatchingService`) over every active `face_profile` row on every recognition/registration attempt — no vector index, no DB-side computation. This is the single most scale-sensitive piece of the system; any feature that increases how often/how many places call `findMatch()` should account for this cost growing linearly with the visitor directory size.
+- **Face matching is a linear PHP-side scan** (`FaceMatchingService`) over every active `face_profile` row on every recognition/registration attempt — no vector index, no DB-side computation. This is the single most scale-sensitive piece of the system; any feature that increases how often/how many places call `match()`/`findMatch()` should account for this cost growing linearly with the visitor directory size. As of the 2026-09-03 multi-pose upgrade, a fully-migrated profile can carry up to 3 pose comparisons instead of 1 — at 10,000 profiles that's ~30,000 comparisons per unscoped call in the worst case, still comfortably sub-second (a few MFLOPs of plain arithmetic), so a vector DB/ANN index is deliberately not warranted yet — don't introduce one prematurely.
 - **Kiosk recognition loop cadence** is controlled entirely client-side (inline JS in `kiosk/show.blade.php`) — not documented/enforced server-side. `NEEDS VERIFICATION` for the actual polling interval; treat any change to kiosk-side polling frequency as directly multiplying load on `FaceMatchingService`.
 - **Google Sheets API quota:** one `values.append` call per Time In/Time Out event, no batching. A burst of simultaneous kiosk activity across many farms could approach per-minute quota limits; failures degrade gracefully but leave sheet gaps.
 - **Session Auto-Resolution batch size:** `chunkById(100, ...)` — safe for memory at any scale, but a very large `ACTIVE` backlog (e.g. after an extended outage) will take proportionally longer per daily run; there is no parallelism.
@@ -1469,10 +1550,10 @@ Owning module: Downtime Matrix PDF Import. `PENDING_VERIFICATION → CANCELLED` 
 | Module | Critical Files |
 |---|---|
 | Visitor Sync | `app/Http/Controllers/Api/VisitorSyncController.php`, `app/Services/VisitorSyncService.php`, `app/Services/FacilityResolver.php` (renamed from `FarmResolver.php` on 2026-08-27), `app/Http/Requests/Api/VisitorSyncRequest.php`, `app/Http/Middleware/VerifyApiKey.php` |
-| Visitor Registration | `app/Http/Controllers/Visitor/RegistrationController.php`, `app/Services/VisitorRegistrationService.php`, `app/Services/Qr/VisitorQrCodeService.php` |
+| Visitor Registration | `app/Http/Controllers/Visitor/RegistrationController.php`, `app/Services/VisitorRegistrationService.php`, `app/Services/Qr/VisitorQrCodeService.php`, `public/js/face-enrollment.js` (shared with Kiosk Self-Service), `resources/views/visitor/capture.blade.php` |
 | Kiosk Entry | `app/Http/Controllers/Kiosk/KioskController.php`, `app/Services/Kiosk/VisitorKioskService.php`, `app/Models/VisitorRequest.php`, `app/Models/VisitorSession.php`, `app/Http/Middleware/VerifyKioskToken.php` |
-| Kiosk Self-Service | `app/Http/Controllers/Kiosk/KioskController.php` (same file as Kiosk Entry), `app/Models/VisitorProfile.php` |
-| Face Matching | `app/Services/Face/FaceMatchingService.php` |
+| Kiosk Self-Service | `app/Http/Controllers/Kiosk/KioskController.php` (same file as Kiosk Entry), `app/Models/VisitorProfile.php`, `public/js/face-enrollment.js` (shared with Visitor Registration), `resources/views/kiosk/show.blade.php` |
+| Face Matching | `app/Services/Face/FaceMatchingService.php`, `app/Services/Face/FacePose.php`, `app/Services/Face/FaceMatchResult.php`, `app/Models/FaceProfileEmbedding.php`, `database/migrations/2026_09_03_100000_create_face_profile_embedding_table.php` |
 | Google Sheets Integration | `app/Services/GoogleSheets/GoogleSheetsClient.php`, `app/Services/GoogleSheets/VisitorSheetWriter.php`, `app/Providers/AppServiceProvider.php` |
 | Session Auto-Resolution | `app/Console/Commands/ResolveExpiredVisitorSessions.php`, `routes/console.php` |
 | Biosecurity Rules (Downtime Matrix / Downtime Stationary) | `app/Http/Controllers/Admin/BiosecurityRuleController.php` (landing/cards only), `app/Http/Controllers/Admin/DowntimeMatrixController.php`, `app/Http/Controllers/Admin/DowntimeStationaryController.php`, `app/Models/DowntimeMatrix.php`, `app/Models/DowntimeStationary.php` |
@@ -1495,7 +1576,7 @@ Owning module: Downtime Matrix PDF Import. `PENDING_VERIFICATION → CANCELLED` 
 5. Trace cross-module flows (§4) before changing anything shared: `processEntry`, `FaceMatchingService`, `VisitorRequest::isCompleted()`/`isExcludedFromGoogleSheets()`, the `Auditable` trait.
 6. Check whether an existing service already performs the operation you're about to add — this codebase consistently centralizes shared logic (one `FaceMatchingService`, one `processEntry`, one `pickBestActiveRequest`) rather than duplicating it per call site; follow that pattern.
 7. Reuse existing services instead of writing parallel logic, especially for anything touching face matching, session state, or Google Sheets exclusion.
-8. Do not change any of the 21 business rules in §9 unless explicitly asked to.
+8. Do not change any of the 26 business rules in §9 unless explicitly asked to.
 9. Do not change the shape of any kiosk/API JSON response (`success`/`type`/`message` conventions) without checking the corresponding frontend (`resources/views/kiosk/show.blade.php`, `resources/views/visitor/*.blade.php`) and the test suite (`tests/Feature/Kiosk/*`, `tests/Feature/Visitor/*`) for every consumer.
 10. Do not hardcode or log secrets (`SYNC_API_KEY`, Google service-account contents) — both are already externalized correctly; keep them that way.
 11. Preserve the Google Sheets exclusion rule and the non-blocking/best-effort nature of Sheets writes when touching `VisitorKioskService` or `ResolveExpiredVisitorSessions`.
@@ -1521,6 +1602,8 @@ Owning module: Downtime Matrix PDF Import. `PENDING_VERIFICATION → CANCELLED` 
 | 10 | Admin Management | ~~Two visually similar site-management screens (`admin/farms` vs `admin/facilities`), only one with runtime effect~~ **RESOLVED 2026-08-27 (Phase 5)** — the legacy `FarmController`/`FarmAliasController`, their Requests, views, routes, and nav links were removed entirely; `admin/facilities`/`admin/facility-aliases` are now the only site-management screens. `farm_list`/`farm_aliases` remain in the DB as inert legacy data (no admin UI, no code path) | N/A — closed | `app/Http/Controllers/Admin/{Facility,FacilityAlias}Controller.php` | RESOLVED |
 | 11 | Admin Management (all resources) | ~~Every Admin controller's private `view()` helper falls back to re-rendering the full `index` page for a non-AJAX request, but `create()`/`edit()` never pass that page's required paginated-list variable~~ **RESOLVED 2026-08-28, as a side effect of the Data Table migration** — `index()` no longer queries or passes a paginated list variable to its Blade view at all (that's now the `/data` JSON endpoint's job), so the full-page fallback for `create()`/`edit()` no longer needs (or is missing) any such variable. A direct, non-AJAX `GET admin/facilities/{id}/edit` now renders correctly. This applies to every resource covered by the Data Table migration (Facilities, Facility Aliases, Kiosk Devices, Identity Types, Employee Types, Downtime Matrix, Downtime Stationary, Roles, Users) — Audit Logs never had `create()`/`edit()` to begin with, and Downtime Matrix Import's `create()` was never affected (it never took a list variable). | N/A — closed | `app/Http/Controllers/Admin/*.php` | RESOLVED |
 | 12 | Admin Management (dashboard) | `resources/views/admin/dashboard.blade.php` and `dashboard-content.blade.php` still show a "Farms" stat tile calling `\App\Models\FarmList::count()`, left in place when the Farms admin screen was removed (Phase 5) | The tile still renders a live count (currently 8) but no longer links to anything — there's no `admin/farms` screen left to navigate to | Cosmetic only — `FarmList` model and `farm_list` table both still exist, so nothing errors; just a stale/orphaned stat an admin might click expecting a screen | `resources/views/admin/dashboard.blade.php`, `resources/views/admin/dashboard-content.blade.php` | CONFIRMED (found during Phase 5 decommissioning; deliberately left out of scope, not fixed) |
+| 13 | Face Matching / Visitor Registration / Kiosk Self-Service | Multi-Pose Face Enrollment upgrade (2026-09-03) shipped Phases A–C only — Phase D (legacy-profile backfill Artisan command, shared `FaceProfileFactory`/`CreatesFaceProfiles` test trait, ambiguity-margin recalibration against real distance data) has not been done | Legacy `face_profile` rows still match correctly (fallback to their own `embedding` column — this is not a correctness bug), but have no explicit `face_profile_embedding` row for future admin/reporting tooling to query against; the `0.08` ambiguity margin is an unverified starting guess; each face-matching test file still hand-rolls its own local `descriptor()` helper (unchanged, pre-existing pattern) | None currently — purely a data-tidiness/tooling gap and a calibration task, not a functional defect | `app/Services/Face/FaceMatchingService.php`, `app/Models/FaceProfileEmbedding.php` | CONFIRMED (deliberately deferred, per the approved phased implementation plan) |
+| 14 | Visitor Registration / Kiosk Self-Service (guided capture) | The guided FRONT/LEFT/RIGHT capture's pose/position thresholds (`public/js/face-enrollment.js`'s `FaceEnrollment.config`: yaw proxy, centering/size ratios, stability window) are reasoned starting defaults, not calibrated against real enrollment footage; there is also no JS test runner in this repo (`package.json` only lists `jquery`) so the guided-capture state machine has no automated test coverage of its own | Pose detection may feel too strict/loose in real use until tuned; a regression in the module's detection logic would only surface via manual testing, not a test suite | Enrollment UX quality risk until a tuning pass happens against real usage; not a data-integrity risk, since the *backend* `poses` contract the module feeds into is fully tested | `public/js/face-enrollment.js`, `resources/views/visitor/capture.blade.php`, `resources/views/kiosk/show.blade.php` | CONFIRMED (explicitly flagged as a tuning item when the feature shipped) |
 
 Do not fix any of these unless explicitly asked.
 
@@ -1565,6 +1648,38 @@ If the request is about Visitor Registration (face capture / QR):
     Implement change
     ↓
     Update this file if Option A/B flow or the manual-verification trigger changes
+
+If the request is about Face Matching or the guided multi-pose enrollment capture
+(FaceMatchingService, face_profile_embedding, public/js/face-enrollment.js):
+    Read §2 "Face Matching" in full, plus "Visitor Registration" and "Kiosk Self-Service"
+    for how their two capture screens each wire the shared FaceEnrollment module in
+    ↓
+    Confirm whether the change touches an already-decided design point before altering it:
+    min-distance-across-poses scoring (never average), a childless face_profile is the
+    legacy-compatibility case (not a special-cased branch), AMBIGUOUS handling is decided
+    per call site (fail-safe for recognize(), route-to-human-confirmation for both dedup
+    checks), a poses payload never requires exactly 3 keys and the write path never
+    fabricates a missing one, verifyFaceOptionB() intentionally still takes one plain
+    descriptor - see §9 rules 23-26 for the full list
+    ↓
+    If touching the shared JS module (public/js/face-enrollment.js), remember it is used
+    by BOTH capture.blade.php and kiosk/show.blade.php's Gatesale/Truck registration screen
+    - a change here affects both; do not fork it into a page-local copy. Tunable thresholds
+    (yaw proxy, centering/size, stability window) live in FaceEnrollment.config, isolated
+    for exactly this kind of future tuning pass - see Known Issue #14 before assuming the
+    current values are final
+    ↓
+    If touching the kiosk registration screen specifically, remember the guided capture
+    runs against a SEPARATE #enrollment-webcam element sharing the same MediaStream as the
+    main #webcam - never call getUserMedia() a second time, and never modify the continuous
+    recognition loop (detectionTick/runDetectionCycle/attemptFaceRecognition) to make this
+    coexistence work - the existing currentState = STATES.PROCESSING pause convention is
+    the mechanism, already used by every other multi-step Gatesale screen in that file
+    ↓
+    Implement change
+    ↓
+    Update this file if the poses contract, scoring/ambiguity algorithm, config keys, or
+    the guided-capture state machine's sequence changes
 
 If the request is about Google Sheets:
     Read §2 "Google Sheets Integration"
@@ -1641,22 +1756,22 @@ resolution, editing staged rows, or Save to Production mapping):
 ## 17. System Quick Reference
 
 ### Modules
-Visitor Sync · Visitor Registration · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck) · Face Matching · Google Sheets Integration · Session Auto-Resolution · Facility Master Data (live site-binding target since the 2026-08-27 cutover) · Admin Management · Downtime Matrix PDF Import (Phase 1 — parse/validate/preview, added 2026-08-27; Phase 2 — Save to Production mapping into `downtime_matrix`/`downtime_stationary`, added 2026-08-28) · Authentication & Authorization · Audit Logging (cross-cutting)
+Visitor Sync · Visitor Registration (guided multi-pose capture added 2026-09-03) · Kiosk Entry · Kiosk Self-Service (Gatesale/Truck, guided multi-pose capture added 2026-09-03) · Face Matching (multi-pose scoring/ambiguity upgrade, Phases A–C added 2026-09-03, Phase D not done) · Google Sheets Integration · Session Auto-Resolution · Facility Master Data (live site-binding target since the 2026-08-27 cutover) · Admin Management · Downtime Matrix PDF Import (Phase 1 — parse/validate/preview, added 2026-08-27; Phase 2 — Save to Production mapping into `downtime_matrix`/`downtime_stationary`, added 2026-08-28) · Authentication & Authorization · Audit Logging (cross-cutting)
 
 ### Main APIs
-`POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` · `/register/visitor/*` (public) · `/admin/*` (authenticated resource routes) · `/admin/biosecurity-rules/downtime-matrix-import/*` (upload/preview/verify/cancel) · `/login`, `/logout`
+`POST /api/v1/visitor/sync` · `POST /kiosk/{kiosk}/recognize` · `POST /kiosk/{kiosk}/entry` · `POST /kiosk/{kiosk}/gatesale/{update-details,create-visit,register-identity}` (accepts `poses` as of 2026-09-03) · `/register/visitor/*` (public; `capture` accepts `poses` as of 2026-09-03) · `/admin/*` (authenticated resource routes) · `/admin/biosecurity-rules/downtime-matrix-import/*` (upload/preview/verify/cancel) · `/login`, `/logout`
 
 ### Main Data Entities
-`user_directory` · `visitor_profile` · `face_profile` · `visitor_request` (site-bound via `facility_id`) · `visitor_session` · `visitor_entry_logs` · `kiosk_device` (site-bound via `facility_id`) · `facility_type` / `facility_category` / `facility_list` / `facility_aliases` (live site-binding target for `visitor_request`, `kiosk_device`, `downtime_matrix`, and `downtime_stationary` since 2026-08-27, now with a full admin CRUD) · `farm_list` / `farm_aliases` (pure legacy data as of 2026-08-27 Phase 5 — no admin UI, no remaining FKs, `FarmList`/`FarmAlias` models kept but unused) · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`, facility-based since the 2026-08-27 Phase 4 cutover) · `downtime_matrix_imports` / `downtime_matrix_import_rows` (Downtime Matrix PDF Import staging tables, added 2026-08-27 — never connected to `downtime_matrix`/`downtime_stationary`) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
+`user_directory` · `visitor_profile` · `face_profile` (identity-level; `embedding`/`face_image` are the FRONT-pose fallback as of 2026-09-03) · `face_profile_embedding` (new 2026-09-03 — one row per FRONT/LEFT/RIGHT pose, child of `face_profile`) · `visitor_request` (site-bound via `facility_id`) · `visitor_session` · `visitor_entry_logs` · `kiosk_device` (site-bound via `facility_id`) · `facility_type` / `facility_category` / `facility_list` / `facility_aliases` (live site-binding target for `visitor_request`, `kiosk_device`, `downtime_matrix`, and `downtime_stationary` since 2026-08-27, now with a full admin CRUD) · `farm_list` / `farm_aliases` (pure legacy data as of 2026-08-27 Phase 5 — no admin UI, no remaining FKs, `FarmList`/`FarmAlias` models kept but unused) · `identity_type` / `employee_type` / `visitor_type` · `downtime_matrix` / `downtime_stationary` (Biosecurity Rules submodules, formerly `biosecurity_rules`, facility-based since the 2026-08-27 Phase 4 cutover) · `downtime_matrix_imports` / `downtime_matrix_import_rows` (Downtime Matrix PDF Import staging tables, added 2026-08-27 — never connected to `downtime_matrix`/`downtime_stationary`) · `role` / `permission` / `users` · `audit_logs` / `api_logs`
 
 ### External Systems
 AppSheet (inbound webhook, one-way) · Google Sheets API (outbound write, one-way) · `face-api.js` + `jsQR` (client-side, CDN-loaded)
 
 ### Critical Business Rules
-Directory merge requires full_name+email match · No fuzzy farm matching · Terminal request states are permanent · Farm binding double-enforced · Gatesale/Truck: one active visit globally, guarded by a directory-keyed lock · Google Sheets writes excluded for Gatesale/Truck and always best-effort/non-blocking · Session Auto-Resolution never fabricates recovered times · Biometric conflict never blocks QR entry · RBAC checked at both route and FormRequest layers · Downtime Matrix/Stationary uniqueness enforced at both DB and FormRequest layers · Downtime Matrix PDF Import only writes to `downtime_matrix`/`downtime_stationary` through a confirmed Save to Production step (never through Verify alone), maps only VALID/WARNING rows, and never assigns a facility-group match a single `facility_id` — a group is expanded into its current active member facilities only at production-mapping time
+Directory merge requires full_name+email match · No fuzzy farm matching · Terminal request states are permanent · Farm binding double-enforced · Gatesale/Truck: one active visit globally, guarded by a directory-keyed lock · Google Sheets writes excluded for Gatesale/Truck and always best-effort/non-blocking · Session Auto-Resolution never fabricates recovered times · Biometric conflict never blocks QR entry · RBAC checked at both route and FormRequest layers · Downtime Matrix/Stationary uniqueness enforced at both DB and FormRequest layers · Downtime Matrix PDF Import only writes to `downtime_matrix`/`downtime_stationary` through a confirmed Save to Production step (never through Verify alone), maps only VALID/WARNING rows, and never assigns a facility-group match a single `facility_id` — a group is expanded into its current active member facilities only at production-mapping time · Face matching scores by minimum distance across a profile's available poses, never an average · a poses-based enrollment write path never fabricates a pose it wasn't given · face-match ambiguity handling is decided deliberately per call site (fail-safe for kiosk recognition, route-to-human-confirmation for dedup checks) · legacy single-embedding face profiles remain matchable forever, with no forced migration
 
 ### Critical Constraints
-Face matching is an unindexed linear PHP scan · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap, unlike `facility_list`, which got one 2026-08-27) · every Admin controller's `view()` fallback for `create()`/`edit()` on a non-AJAX request throws (never triggered in real use, see Known Issue #11) · Downtime Matrix PDF Import's grid-reconstruction tolerances are tuned against one real PDF layout and its parsing is synchronous/single-page only
+Face matching is an unindexed linear PHP scan (now up to 3x pose-comparison volume for fully multi-pose-enrolled profiles) · Kiosk recognition depends on external CDNs with no offline fallback · Google Sheets has no batching, only a 3x retry · `audit_logs`/`api_logs` have no pruning · `VisitorType` has no seeder/admin UI (operational gap, unlike `facility_list`, which got one 2026-08-27) · every Admin controller's `view()` fallback for `create()`/`edit()` on a non-AJAX request throws (never triggered in real use, see Known Issue #11) · Downtime Matrix PDF Import's grid-reconstruction tolerances are tuned against one real PDF layout and its parsing is synchronous/single-page only · the guided multi-pose enrollment capture's pose/position thresholds are reasoned starting defaults, not calibrated against real footage, and this repo has no JS test runner to cover that logic (see Known Issue #14) · no Phase D backfill command exists yet for legacy `face_profile` rows (see Known Issue #13)
 
 ### Most Important Files
-`app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php` · `app/Services/DowntimeMatrixImport/DowntimeMatrixImportService.php`
+`app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `public/js/face-enrollment.js` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php` · `app/Services/DowntimeMatrixImport/DowntimeMatrixImportService.php`

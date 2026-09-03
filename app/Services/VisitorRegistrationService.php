@@ -4,8 +4,11 @@ namespace App\Services;
 
 use App\Models\VisitorRequest;
 use App\Models\FaceProfile;
+use App\Models\FaceProfileEmbedding;
 use App\Models\UserDirectory;
 use App\Services\Face\FaceMatchingService;
+use App\Services\Face\FacePose;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class VisitorRegistrationService
@@ -14,12 +17,21 @@ class VisitorRegistrationService
     {
     }
 
+    /**
+     * $poses is keyed by whichever of FacePose::ALL were actually captured
+     * ({descriptor: float[128], face_image?: base64}) - currently always
+     * just FRONT until the guided multi-pose capture UX ships, but the
+     * write path below never assumes a fixed count: it creates exactly one
+     * FaceProfileEmbedding row per pose key actually present, never
+     * fabricating LEFT/RIGHT from FRONT.
+     */
     public function completeFaceRegistrationOptionA(
         VisitorRequest $visitorRequest,
-        array $descriptor,
-        ?string $faceImageBase64 = null
+        array $poses
     ): array {
-        $existingMatch = $this->faceMatchingService->findMatch($descriptor);
+        $frontDescriptor = $poses[FacePose::FRONT]['descriptor'] ?? null;
+
+        $existingMatch = $this->faceMatchingService->findMatch($frontDescriptor);
 
         if ($existingMatch && $existingMatch->directory_id === $visitorRequest->directory_id) {
             // Same person, already registered - do not create a duplicate face_profile.
@@ -45,19 +57,42 @@ class VisitorRegistrationService
         }
 
         $directory = $visitorRequest->directory;
-        $facePath = null;
 
-        if ($faceImageBase64) {
-            $facePath = $this->storeFaceImage($visitorRequest->visitor_request_id, $faceImageBase64);
-        }
+        $faceProfile = DB::transaction(function () use ($directory, $poses, $visitorRequest, $frontDescriptor) {
+            $frontImagePath = null;
+            $frontImageBase64 = $poses[FacePose::FRONT]['face_image'] ?? null;
+            if ($frontImageBase64) {
+                $frontImagePath = $this->storeFaceImage($visitorRequest->visitor_request_id, $frontImageBase64);
+            }
 
-        $faceProfile = FaceProfile::create([
-            'directory_id' => $directory->directory_id,
-            'embedding' => $descriptor,
-            'face_image' => $facePath,
-            'face_version' => '1.0',
-            'is_active' => true,
-        ]);
+            $profile = FaceProfile::create([
+                'directory_id' => $directory->directory_id,
+                'embedding' => $frontDescriptor,
+                'face_image' => $frontImagePath,
+                'face_version' => '1.0',
+                'is_active' => true,
+            ]);
+
+            foreach ($poses as $pose => $data) {
+                if (!is_array($data['descriptor'] ?? null) || empty($data['descriptor'])) {
+                    continue;
+                }
+
+                $imagePath = $pose === FacePose::FRONT
+                    ? $frontImagePath
+                    : (isset($data['face_image']) ? $this->storeFaceImage($visitorRequest->visitor_request_id, $data['face_image']) : null);
+
+                FaceProfileEmbedding::create([
+                    'face_profile_id' => $profile->face_profile_id,
+                    'pose' => $pose,
+                    'embedding' => $data['descriptor'],
+                    'face_image' => $imagePath,
+                    'face_version' => '1.0',
+                ]);
+            }
+
+            return $profile;
+        });
 
         $visitorRequest->update(['face_registration_status' => 'REGISTERED']);
 

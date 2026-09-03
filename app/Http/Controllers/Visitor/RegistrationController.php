@@ -90,8 +90,7 @@ class RegistrationController extends Controller
     public function captureFace(Request $request)
     {
         $token = $request->input('token');
-        $descriptor = $request->input('descriptor');
-        $faceImageBase64 = $request->input('face_image');
+        $poses = $request->input('poses');
 
         $visitorRequest = VisitorRequest::where('registration_token', $token)
             ->where('approval_status', 'Approved')
@@ -101,14 +100,13 @@ class RegistrationController extends Controller
             return response()->json(['success' => false, 'message' => 'Invalid token'], 400);
         }
 
-        if (!is_array($descriptor)) {
+        if (!is_array($poses) || !is_array($poses['FRONT']['descriptor'] ?? null) || empty($poses['FRONT']['descriptor'])) {
             return response()->json(['success' => false, 'message' => 'Invalid descriptor'], 400);
         }
 
         $result = $this->registrationService->completeFaceRegistrationOptionA(
             $visitorRequest,
-            $descriptor,
-            $faceImageBase64
+            $poses
         );
 
         // Check if face was found in a different directory

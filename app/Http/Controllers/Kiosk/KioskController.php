@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Kiosk;
 
 use App\Http\Controllers\Controller;
 use App\Models\FaceProfile;
+use App\Models\FaceProfileEmbedding;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
 use App\Models\UserDirectory;
@@ -12,6 +13,7 @@ use App\Models\VisitorRequest;
 use App\Models\VisitorType;
 use App\Services\Kiosk\VisitorKioskService;
 use App\Services\Face\FaceMatchingService;
+use App\Services\Face\FacePose;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -48,8 +50,11 @@ class KioskController extends Controller
         $qrValue = $request->input('qr_value');
 
         if ($descriptor) {
-            $match = $this->faceMatchingService->findMatch($descriptor);
-            if (!$match) {
+            $result = $this->faceMatchingService->match($descriptor);
+            if (!$result->isMatch()) {
+                // AMBIGUOUS fails safe here, same as NO_MATCH - unattended
+                // recognition has no human-in-the-loop step to resolve an
+                // uncertain guess, so "try QR code" is the safe fallback.
                 return response()->json([
                     'success' => false,
                     'type' => 'face_not_found',
@@ -57,6 +62,7 @@ class KioskController extends Controller
                 ], 404);
             }
 
+            $match = $result->profile;
             $directory = $match->directory;
             $directory->loadMissing('visitorProfile.visitorType');
 
@@ -413,7 +419,7 @@ class KioskController extends Controller
         $visitorType = $request->input('visitor_type');
         $fullName = $request->input('full_name');
         $company = $request->input('company');
-        $descriptor = $request->input('descriptor');
+        $poses = $request->input('poses');
         $email = $request->input('email');
         $phone = $request->input('phone');
         $plateNo = $request->input('plate_no');
@@ -425,7 +431,9 @@ class KioskController extends Controller
             ], 422);
         }
 
-        if (!$fullName || !$company || !is_array($descriptor) || empty($descriptor)) {
+        $frontDescriptor = $poses[FacePose::FRONT]['descriptor'] ?? null;
+
+        if (!$fullName || !$company || !is_array($frontDescriptor) || empty($frontDescriptor)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Full Name, Company, and a face capture are required.',
@@ -439,7 +447,7 @@ class KioskController extends Controller
             ], 422);
         }
 
-        $match = $this->faceMatchingService->findMatch($descriptor);
+        $match = $this->faceMatchingService->findMatch($frontDescriptor);
         if ($match) {
             $matchedDirectory = $match->directory;
             $matchedDirectory->loadMissing('visitorProfile.visitorType');
@@ -456,7 +464,7 @@ class KioskController extends Controller
             ], 422);
         }
 
-        return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $descriptor) {
+        return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $poses, $frontDescriptor) {
             $directory = UserDirectory::create([
                 'identity_type_id' => IdentityType::where('identity_type_name', 'Visitor')->value('identity_type_id'),
                 'person_reference' => $email ?: ($phone ?: (strtoupper($visitorType) . '-' . Str::upper(Str::random(8)))),
@@ -474,12 +482,28 @@ class KioskController extends Controller
                 'plate_no' => $visitorType === 'Truck' ? $plateNo : null,
             ]);
 
-            FaceProfile::create([
+            $profile = FaceProfile::create([
                 'directory_id' => $directory->directory_id,
-                'embedding' => $descriptor,
+                'embedding' => $frontDescriptor,
                 'face_version' => '1.0',
                 'is_active' => true,
             ]);
+
+            // One row per pose key actually present in $poses (FRONT-only
+            // today, until the guided multi-pose capture UX ships) - never
+            // fabricates LEFT/RIGHT.
+            foreach ($poses as $pose => $data) {
+                if (!is_array($data['descriptor'] ?? null) || empty($data['descriptor'])) {
+                    continue;
+                }
+
+                FaceProfileEmbedding::create([
+                    'face_profile_id' => $profile->face_profile_id,
+                    'pose' => $pose,
+                    'embedding' => $data['descriptor'],
+                    'face_version' => '1.0',
+                ]);
+            }
 
             return response()->json([
                 'success' => true,

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Kiosk;
 
 use App\Models\FaceProfile;
+use App\Models\FaceProfileEmbedding;
 use App\Models\FacilityList;
 use App\Models\IdentityType;
 use App\Models\KioskDevice;
@@ -122,8 +123,19 @@ class KioskGatesaleFlowTest extends TestCase
         ]);
     }
 
+    /**
+     * FRONT-only for now - the guided multi-pose capture UX hasn't shipped
+     * yet, so a bare 'descriptor' key here is transparently wrapped into
+     * the {poses: {FRONT: {...}}} shape the endpoint now expects, matching
+     * exactly what kiosk/show.blade.php's gatesale registration JS sends.
+     */
     private function registerIdentity(array $body)
     {
+        if (array_key_exists('descriptor', $body)) {
+            $body['poses'] = ['FRONT' => ['descriptor' => $body['descriptor']]];
+            unset($body['descriptor']);
+        }
+
         return $this->postJson("/kiosk/{$this->kiosk->kiosk_id}/gatesale/register-identity", array_merge([
             'visitor_type' => 'Gatesale',
         ], $body), [
@@ -456,6 +468,71 @@ class KioskGatesaleFlowTest extends TestCase
         $this->assertEquals(0, VisitorRequest::count());
         $this->assertEquals(0, VisitorSession::count());
         $this->assertEquals(0, VisitorEntryLog::count());
+    }
+
+    public function test_register_identity_front_only_creates_a_single_front_embedding_row(): void
+    {
+        // FRONT-only via the plain 'descriptor' key - registerIdentity()'s
+        // helper wraps it into {poses:{FRONT:{...}}}, exactly the shape a
+        // guided capture that only obtained FRONT would send.
+        $this->registerIdentity([
+            'full_name' => 'Front Only Visitor',
+            'company' => 'Co',
+            'descriptor' => $this->descriptor(0.60),
+        ])->assertOk()->assertJson(['success' => true]);
+
+        $directory = UserDirectory::where('full_name', 'Front Only Visitor')->sole();
+        $this->assertEquals(1, FaceProfileEmbedding::whereHas('faceProfile', fn ($q) => $q->where('directory_id', $directory->directory_id))->count());
+        $embedding = FaceProfileEmbedding::whereHas('faceProfile', fn ($q) => $q->where('directory_id', $directory->directory_id))->sole();
+        $this->assertEquals('FRONT', $embedding->pose);
+    }
+
+    public function test_register_identity_full_pose_creates_one_embedding_row_per_pose(): void
+    {
+        $response = $this->registerIdentity([
+            'full_name' => 'Full Pose Visitor',
+            'company' => 'Co',
+            'poses' => [
+                'FRONT' => ['descriptor' => $this->descriptor(0.70)],
+                'LEFT' => ['descriptor' => $this->descriptor(0.71)],
+                'RIGHT' => ['descriptor' => $this->descriptor(0.72)],
+            ],
+        ]);
+
+        $response->assertOk()->assertJson(['success' => true]);
+
+        $directory = UserDirectory::where('full_name', 'Full Pose Visitor')->sole();
+        $faceProfile = FaceProfile::where('directory_id', $directory->directory_id)->sole();
+
+        $this->assertEquals(3, $faceProfile->embeddings()->count());
+        $byPose = $faceProfile->embeddings()->get()->keyBy('pose');
+        $this->assertEquals($this->descriptor(0.70), $byPose['FRONT']->embedding);
+        $this->assertEquals($this->descriptor(0.71), $byPose['LEFT']->embedding);
+        $this->assertEquals($this->descriptor(0.72), $byPose['RIGHT']->embedding);
+
+        // FRONT still populates the legacy face_profile columns - gatesale
+        // registration never stores a face_image (unchanged from before
+        // this feature), only the embedding.
+        $this->assertEquals($this->descriptor(0.70), $faceProfile->embedding);
+    }
+
+    public function test_register_identity_partial_pose_never_fabricates_the_missing_pose(): void
+    {
+        $response = $this->registerIdentity([
+            'full_name' => 'Partial Pose Visitor',
+            'company' => 'Co',
+            'poses' => [
+                'FRONT' => ['descriptor' => $this->descriptor(0.80)],
+                'LEFT' => ['descriptor' => $this->descriptor(0.81)],
+            ],
+        ]);
+
+        $response->assertOk()->assertJson(['success' => true]);
+
+        $directory = UserDirectory::where('full_name', 'Partial Pose Visitor')->sole();
+        $faceProfile = FaceProfile::where('directory_id', $directory->directory_id)->sole();
+
+        $this->assertEqualsCanonicalizing(['FRONT', 'LEFT'], $faceProfile->embeddings()->pluck('pose')->all());
     }
 
     public function test_register_identity_then_create_visit_completes_full_gatesale_flow(): void

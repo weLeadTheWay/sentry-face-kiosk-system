@@ -250,6 +250,19 @@
                 <input type="text" class="setup-input" id="gatesale-purpose" placeholder="Purpose">
                 <button class="setup-btn" id="gatesale-visit-submit-btn" onclick="gatesaleSubmitVisit()">Continue</button>
             </div>
+            <div id="gatesale-capture-step" style="display:none;">
+                <div class="setup-title">Face Enrollment</div>
+                <div style="position:relative; width:100%; max-width:340px; margin:0 auto 15px; border-radius:8px; overflow:hidden; background:#000;">
+                    <video id="enrollment-webcam" autoplay playsinline muted style="width:100%; display:block; transform:scaleX(-1);"></video>
+                </div>
+                <p id="gatesale-capture-status" style="margin-bottom:12px; color:#333; min-height:24px;">Initializing...</p>
+                <div style="display:flex; gap:8px; justify-content:center; margin-bottom:15px;">
+                    <span id="gatesale-capture-dot-FRONT" style="width:12px;height:12px;border-radius:50%;background:#ccc;display:inline-block;"></span>
+                    <span id="gatesale-capture-dot-LEFT" style="width:12px;height:12px;border-radius:50%;background:#ccc;display:inline-block;"></span>
+                    <span id="gatesale-capture-dot-RIGHT" style="width:12px;height:12px;border-radius:50%;background:#ccc;display:inline-block;"></span>
+                </div>
+                <button class="setup-btn" style="background:#6c757d;" onclick="gatesaleCancelRegistration()">Cancel</button>
+            </div>
             <div id="gatesale-register-step" style="display:none;">
                 <div class="setup-title">Visitor Registration</div>
                 <select class="setup-input" id="gatesale-reg-type" onchange="toggleGatesaleRegPlateNo()">
@@ -268,6 +281,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="{{ asset('js/face-enrollment.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
@@ -719,7 +733,8 @@
         // ===== Gatesale flow =====
 
         let pendingGatesaleDirectory = null;
-        let capturedGatesaleDescriptor = null;
+        let capturedGatesalePoses = null;
+        let gatesaleEnrollmentController = null;
         let gatesaleIdleTimer = null;
         const GATESALE_IDLE_TIMEOUT_MS = 30000;
 
@@ -730,6 +745,7 @@
         function startGatesaleIdleTimer() {
             clearGatesaleIdleTimer();
             gatesaleIdleTimer = setTimeout(() => {
+                stopGatesaleEnrollment();
                 showView('main-view');
                 finishInteraction();
             }, GATESALE_IDLE_TIMEOUT_MS);
@@ -742,6 +758,12 @@
             }
         }
 
+        function hideAllGatesaleSteps() {
+            ['gatesale-confirm-step', 'gatesale-edit-step', 'gatesale-visit-step', 'gatesale-capture-step', 'gatesale-register-step'].forEach(id => {
+                document.getElementById(id).style.display = 'none';
+            });
+        }
+
         function showGatesaleConfirm(directory) {
             pendingGatesaleDirectory = directory;
 
@@ -752,10 +774,8 @@
             if (directory.plate_no) lines.push(`<strong>Plate No.:</strong> ${directory.plate_no}`);
             document.getElementById('gatesale-confirm-details').innerHTML = lines.join('<br>');
 
+            hideAllGatesaleSteps();
             document.getElementById('gatesale-confirm-step').style.display = 'block';
-            document.getElementById('gatesale-edit-step').style.display = 'none';
-            document.getElementById('gatesale-visit-step').style.display = 'none';
-            document.getElementById('gatesale-register-step').style.display = 'none';
 
             showView('gatesale-view');
             startGatesaleIdleTimer();
@@ -782,7 +802,7 @@
             plateNoField.value = pendingGatesaleDirectory.plate_no || '';
             plateNoField.style.display = isTruck ? 'block' : 'none';
 
-            document.getElementById('gatesale-confirm-step').style.display = 'none';
+            hideAllGatesaleSteps();
             document.getElementById('gatesale-edit-step').style.display = 'block';
             startGatesaleIdleTimer();
         }
@@ -836,9 +856,7 @@
         }
 
         function showGatesaleVisitStep(showBanner) {
-            document.getElementById('gatesale-confirm-step').style.display = 'none';
-            document.getElementById('gatesale-edit-step').style.display = 'none';
-            document.getElementById('gatesale-register-step').style.display = 'none';
+            hideAllGatesaleSteps();
             document.getElementById('gatesale-host-name').value = '';
             document.getElementById('gatesale-origin').value = '';
             // Gatesale visitors are usually here to pick up eggs - a
@@ -918,21 +936,112 @@
             }
         }
 
-        // New-face Gatesale registration - captures one fresh descriptor from
-        // the already-running video feed, then shows the registration
-        // overlay (identity fields only - no Host/Origin/Purpose here).
-        async function startGatesaleRegistration() {
-            const video = document.getElementById('webcam');
-            const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
-            const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+        // New-face Gatesale registration - runs the shared guided
+        // FRONT/LEFT/RIGHT capture (public/js/face-enrollment.js) against a
+        // dedicated #enrollment-webcam element fed by the SAME already-open
+        // MediaStream as the main recognition loop's #webcam - no second
+        // getUserMedia() call, so there's no camera-lock conflict, and the
+        // continuous recognition loop itself (still targeting #webcam) is
+        // left completely untouched. The main loop is paused for the
+        // duration the same way every other multi-step Gatesale flow
+        // already pauses it: currentState = STATES.PROCESSING.
+        const GATESALE_CAPTURE_MESSAGES = {
+            IDLE: 'Initializing...',
+            INITIALIZING_CAMERA: 'Loading face recognition models...',
+            DETECTING_FACE: {
+                NO_FACE: 'No face detected. Please look at the camera.',
+                MULTIPLE_FACES: 'Please ensure only one face is visible.',
+                LOW_CONFIDENCE: 'Face not clear. Please improve lighting.',
+                default: 'Looking for your face...',
+            },
+            POSITIONING: {
+                TOO_FAR: 'Move closer to the camera.',
+                TOO_CLOSE: 'Move back a little.',
+                OFF_CENTER: 'Please center your face in the frame.',
+                default: 'Position your face in the frame.',
+            },
+            FRONT_READY: { WRONG_POSE: 'Look straight at the camera.', default: 'Hold still...' },
+            LEFT_READY: { WRONG_POSE: 'Slowly turn your head left.', default: 'Hold still...' },
+            RIGHT_READY: { WRONG_POSE: 'Slowly turn your head right.', default: 'Hold still...' },
+            FRONT_CAPTURED: 'Front captured!',
+            LEFT_CAPTURED: 'Left captured!',
+            RIGHT_CAPTURED: 'Right captured!',
+            PROCESSING: 'Finishing up...',
+            DUPLICATE_CHECK: 'Checking for an existing profile...',
+            COMPLETE: 'Enrollment captured.',
+            PROCESSING_ERROR: 'Something went wrong with face detection. Please try again.',
+        };
 
-            if (!detection) {
-                updateStatus('No face detected. Please look at the camera and try again.', 'error');
-                return;
+        function gatesaleCaptureStatusFor(state, meta) {
+            const entry = GATESALE_CAPTURE_MESSAGES[state];
+            if (!entry) return 'Working...';
+            if (typeof entry === 'string') return entry;
+            return entry[(meta && meta.reason) || 'default'] || entry.default;
+        }
+
+        function onGatesaleEnrollmentStateChange(state, meta) {
+            document.getElementById('gatesale-capture-status').textContent = gatesaleCaptureStatusFor(state, meta);
+
+            const capturedIndex = { FRONT_CAPTURED: 0, LEFT_CAPTURED: 1, RIGHT_CAPTURED: 2 }[state];
+            const activePose = meta && meta.pose;
+            ['FRONT', 'LEFT', 'RIGHT'].forEach((pose, index) => {
+                const dot = document.getElementById('gatesale-capture-dot-' + pose);
+                dot.style.background = (capturedIndex !== undefined && index <= capturedIndex)
+                    ? '#28a745'
+                    : (activePose === pose ? '#667eea' : '#ccc');
+            });
+
+            // Reset the 30s abandonment timer on genuine progress (a face is
+            // actually present/being evaluated) but NOT on every idle
+            // no-face tick, so a truly abandoned kiosk mid-registration
+            // still times out as intended.
+            if (state !== 'DETECTING_FACE') {
+                startGatesaleIdleTimer();
             }
+        }
 
-            capturedGatesaleDescriptor = Array.from(detection.descriptor);
+        function stopGatesaleEnrollment() {
+            if (gatesaleEnrollmentController) {
+                gatesaleEnrollmentController.stop();
+                gatesaleEnrollmentController = null;
+            }
+        }
+
+        function startGatesaleRegistration() {
             currentState = STATES.PROCESSING;
+            capturedGatesalePoses = null;
+
+            hideAllGatesaleSteps();
+            document.getElementById('gatesale-capture-step').style.display = 'block';
+            document.getElementById('gatesale-capture-status').textContent = 'Initializing...';
+            ['FRONT', 'LEFT', 'RIGHT'].forEach(pose => {
+                document.getElementById('gatesale-capture-dot-' + pose).style.background = '#ccc';
+            });
+
+            showView('gatesale-view');
+            startGatesaleIdleTimer();
+
+            // Same underlying camera stream the main recognition loop uses -
+            // just fed into this screen's own <video> element, never a
+            // second getUserMedia() acquisition.
+            document.getElementById('enrollment-webcam').srcObject = stream;
+
+            gatesaleEnrollmentController = FaceEnrollment.start({
+                videoEl: document.getElementById('enrollment-webcam'),
+                onStateChange: onGatesaleEnrollmentStateChange,
+                onComplete: onGatesaleEnrollmentComplete,
+                onError: (err) => {
+                    console.error('Gatesale face enrollment error:', err);
+                },
+            });
+        }
+
+        // Guided capture finished (FRONT+LEFT+RIGHT all obtained) - move on
+        // to the identity-details form, same as the old single-shot flow
+        // did immediately after its one descriptor capture.
+        function onGatesaleEnrollmentComplete(poses) {
+            gatesaleEnrollmentController = null;
+            capturedGatesalePoses = poses;
 
             document.getElementById('gatesale-reg-type').value = 'Gatesale';
             ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company', 'gatesale-reg-plate-no'].forEach(id => {
@@ -940,12 +1049,8 @@
             });
             toggleGatesaleRegPlateNo();
 
-            document.getElementById('gatesale-confirm-step').style.display = 'none';
-            document.getElementById('gatesale-edit-step').style.display = 'none';
-            document.getElementById('gatesale-visit-step').style.display = 'none';
+            hideAllGatesaleSteps();
             document.getElementById('gatesale-register-step').style.display = 'block';
-
-            showView('gatesale-view');
             startGatesaleIdleTimer();
         }
 
@@ -956,7 +1061,8 @@
 
         function gatesaleCancelRegistration() {
             clearGatesaleIdleTimer();
-            capturedGatesaleDescriptor = null;
+            stopGatesaleEnrollment();
+            capturedGatesalePoses = null;
             showView('main-view');
             finishInteraction();
         }
@@ -998,7 +1104,9 @@
                         email: email,
                         phone: phone,
                         plate_no: plateNo,
-                        descriptor: capturedGatesaleDescriptor,
+                        // Whichever poses the guided capture actually
+                        // obtained (FRONT/LEFT/RIGHT) - never fabricated.
+                        poses: capturedGatesalePoses,
                     }),
                 });
                 const result = await response.json();
