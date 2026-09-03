@@ -21,12 +21,6 @@
 
     var POSE_SEQUENCE = ['FRONT', 'LEFT', 'RIGHT'];
 
-    var POSE_INSTRUCTIONS = {
-        FRONT: 'Look straight at the camera.',
-        LEFT: 'Slowly turn your head left.',
-        RIGHT: 'Slowly turn your head right.',
-    };
-
     var STATES = {
         IDLE: 'IDLE',
         INITIALIZING_CAMERA: 'INITIALIZING_CAMERA',
@@ -428,7 +422,6 @@
     global.FaceEnrollment = {
         STATES: STATES,
         POSE_SEQUENCE: POSE_SEQUENCE,
-        POSE_INSTRUCTIONS: POSE_INSTRUCTIONS,
         config: CONFIG,
         start: start,
         // Exposed for potential future testing/tuning - not used by the

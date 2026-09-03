@@ -489,9 +489,9 @@ class KioskController extends Controller
                 'is_active' => true,
             ]);
 
-            // One row per pose key actually present in $poses (FRONT-only
-            // today, until the guided multi-pose capture UX ships) - never
-            // fabricates LEFT/RIGHT.
+            // One row per pose key actually present in $poses (the guided
+            // capture UX normally supplies all three) - never fabricates
+            // a missing LEFT/RIGHT/FRONT.
             foreach ($poses as $pose => $data) {
                 if (!is_array($data['descriptor'] ?? null) || empty($data['descriptor'])) {
                     continue;

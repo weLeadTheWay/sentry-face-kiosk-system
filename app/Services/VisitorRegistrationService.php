@@ -19,11 +19,11 @@ class VisitorRegistrationService
 
     /**
      * $poses is keyed by whichever of FacePose::ALL were actually captured
-     * ({descriptor: float[128], face_image?: base64}) - currently always
-     * just FRONT until the guided multi-pose capture UX ships, but the
-     * write path below never assumes a fixed count: it creates exactly one
+     * ({descriptor: float[128], face_image?: base64}) - the guided capture
+     * UX (public/js/face-enrollment.js) normally supplies all three, but
+     * this write path never assumes a fixed count: it creates exactly one
      * FaceProfileEmbedding row per pose key actually present, never
-     * fabricating LEFT/RIGHT from FRONT.
+     * fabricating a missing LEFT/RIGHT/FRONT.
      */
     public function completeFaceRegistrationOptionA(
         VisitorRequest $visitorRequest,
