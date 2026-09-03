@@ -1,0 +1,164 @@
+/**
+ * Shared visual "face guide" overlay for the guided FaceEnrollment capture -
+ * a radial tick-mark ring (Face-ID-style), a scanning sweep, directional
+ * turn hints, and a captured/complete checkmark badge. Pure presentation,
+ * driven by public/js/face-guide-ui.js from the same state/meta pairs
+ * FaceEnrollment.start()'s onStateChange already emits - see that file.
+ *
+ * The host page's own video wrapper must be position:relative and directly
+ * contain the (possibly CSS-mirrored) <video> element - this overlay is
+ * appended as a sibling of the video, absolutely positioned over it, and is
+ * never itself mirrored (so ticks/hints/text stay readable).
+ */
+.fg-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.fg-vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 55% 65% at 50% 46%, rgba(0, 0, 0, 0) 60%, rgba(0, 0, 0, 0.45) 100%);
+}
+
+.fg-ring {
+    position: relative;
+    width: 68%;
+    max-width: 320px;
+    aspect-ratio: 1 / 1;
+    overflow: visible;
+}
+
+.fg-tick {
+    stroke: rgba(255, 255, 255, 0.4);
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    transition: stroke 0.15s ease;
+}
+
+.fg-tick--warn {
+    stroke: #f5a623;
+}
+
+.fg-tick--good {
+    stroke: #2ecc71;
+}
+
+.fg-tick--error {
+    stroke: #e74c3c;
+}
+
+.fg-scan {
+    position: absolute;
+    left: 17%;
+    right: 17%;
+    top: 20%;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, rgba(102, 126, 234, 0) 0%, rgba(102, 126, 234, 0.9) 50%, rgba(102, 126, 234, 0) 100%);
+    box-shadow: 0 0 8px rgba(102, 126, 234, 0.8);
+    opacity: 0;
+}
+
+.fg-overlay[data-mode="searching"] .fg-scan,
+.fg-overlay[data-mode="positioning"] .fg-scan,
+.fg-overlay[data-mode="wrong-pose"] .fg-scan {
+    opacity: 1;
+    animation: fg-sweep 1.8s ease-in-out infinite;
+}
+
+.fg-overlay[data-mode="locking"] .fg-scan {
+    opacity: 1;
+    background: linear-gradient(90deg, rgba(46, 204, 113, 0) 0%, rgba(46, 204, 113, 0.9) 50%, rgba(46, 204, 113, 0) 100%);
+    box-shadow: 0 0 8px rgba(46, 204, 113, 0.8);
+    animation: fg-sweep 0.9s ease-in-out infinite;
+}
+
+.fg-overlay[data-mode="processing"] .fg-scan {
+    opacity: 1;
+    background: linear-gradient(90deg, rgba(46, 204, 113, 0) 0%, rgba(46, 204, 113, 0.9) 50%, rgba(46, 204, 113, 0) 100%);
+    box-shadow: 0 0 8px rgba(46, 204, 113, 0.8);
+    animation: fg-sweep 0.6s linear infinite;
+}
+
+@keyframes fg-sweep {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(230%); }
+    100% { transform: translateY(0); }
+}
+
+.fg-badge {
+    position: absolute;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #2ecc71;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transform: scale(0.4);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    transition: opacity 0.25s ease;
+}
+
+.fg-badge__check {
+    width: 28px;
+    height: 28px;
+}
+
+.fg-badge--show {
+    animation: fg-badge-pop 0.5s cubic-bezier(.34, 1.56, .64, 1) forwards;
+}
+
+@keyframes fg-badge-pop {
+    0% { opacity: 0; transform: scale(0.4); }
+    60% { opacity: 1; transform: scale(1.15); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+.fg-hint {
+    position: absolute;
+    top: 50%;
+    font-size: 40px;
+    line-height: 1;
+    color: #f5a623;
+    opacity: 0;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    transform: translateY(-50%);
+    transition: opacity 0.2s ease;
+}
+
+.fg-hint--left {
+    left: 6%;
+}
+
+.fg-hint--right {
+    right: 6%;
+}
+
+.fg-hint--show.fg-hint--left {
+    opacity: 1;
+    animation: fg-hint-nudge-left 1s ease-in-out infinite;
+}
+
+.fg-hint--show.fg-hint--right {
+    opacity: 1;
+    animation: fg-hint-nudge-right 1s ease-in-out infinite;
+}
+
+@keyframes fg-hint-nudge-left {
+    0%, 100% { transform: translateY(-50%) translateX(0); }
+    50% { transform: translateY(-50%) translateX(-8px); }
+}
+
+@keyframes fg-hint-nudge-right {
+    0%, 100% { transform: translateY(-50%) translateX(0); }
+    50% { transform: translateY(-50%) translateX(8px); }
+}

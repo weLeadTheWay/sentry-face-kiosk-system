@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Face Registration - {{ config('app.name') }}</title>
+    <link rel="stylesheet" href="{{ asset('css/face-guide.css') }}">
     <style>
         * {
             margin: 0;
@@ -167,11 +168,16 @@
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script src="{{ asset('js/face-enrollment.js') }}"></script>
+    <script src="{{ asset('js/face-guide-ui.js') }}"></script>
     <script>
         const token = new URL(window.location).searchParams.get('token');
         let stream = null;
         let lastDirectoryId = null;
         let enrollment = null;
+        // Purely visual (ring/scan-line/hints/checkmark) - driven by the
+        // exact same onStateChange(state, meta) pairs the status text and
+        // pose-progress dots below already use. See public/js/face-guide-ui.js.
+        const faceGuide = FaceGuideUI.create(document.querySelector('.video-container'));
 
         // Human-readable status text per FaceEnrollment state/reason - kept
         // here (not in the shared module) since wording is a per-page
@@ -233,6 +239,7 @@
         function onEnrollmentStateChange(state, meta) {
             document.getElementById('status').textContent = statusFor(state, meta);
             updatePoseProgress(state, meta);
+            faceGuide.update(state, meta);
         }
 
         async function initCamera() {

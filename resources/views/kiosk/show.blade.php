@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Visitor Kiosk - {{ config('app.name') }}</title>
+    <link rel="stylesheet" href="{{ asset('css/face-guide.css') }}">
     <style>
         * {
             margin: 0;
@@ -282,6 +283,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <script src="{{ asset('js/face-enrollment.js') }}"></script>
+    <script src="{{ asset('js/face-guide-ui.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
@@ -298,6 +300,11 @@
         let stream = null;
         let modelsLoaded = false;
         let noFaceStreak = 0;
+        // Purely visual (ring/scan-line/hints/checkmark) overlay for the
+        // Gatesale/Truck guided enrollment screen - created lazily on first
+        // use since #enrollment-webcam's wrapper only needs it once
+        // registration actually starts. See public/js/face-guide-ui.js.
+        let gatesaleFaceGuide = null;
 
         const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
@@ -764,6 +771,9 @@
             clearGatesaleIdleTimer();
             gatesaleIdleTimer = setTimeout(() => {
                 stopGatesaleEnrollment();
+                if (gatesaleFaceGuide) {
+                    gatesaleFaceGuide.reset();
+                }
                 showView('main-view');
                 finishInteraction();
             }, GATESALE_IDLE_TIMEOUT_MS);
@@ -999,6 +1009,9 @@
 
         function onGatesaleEnrollmentStateChange(state, meta) {
             document.getElementById('gatesale-capture-status').textContent = gatesaleCaptureStatusFor(state, meta);
+            if (gatesaleFaceGuide) {
+                gatesaleFaceGuide.update(state, meta);
+            }
 
             const capturedIndex = { FRONT_CAPTURED: 0, LEFT_CAPTURED: 1, RIGHT_CAPTURED: 2 }[state];
             const activePose = meta && meta.pose;
@@ -1043,6 +1056,12 @@
             // just fed into this screen's own <video> element, never a
             // second getUserMedia() acquisition.
             document.getElementById('enrollment-webcam').srcObject = stream;
+
+            if (!gatesaleFaceGuide) {
+                gatesaleFaceGuide = FaceGuideUI.create(document.getElementById('enrollment-webcam').parentElement);
+            } else {
+                gatesaleFaceGuide.reset();
+            }
 
             gatesaleEnrollmentController = FaceEnrollment.start({
                 videoEl: document.getElementById('enrollment-webcam'),
@@ -1089,6 +1108,9 @@
         function gatesaleCancelRegistration() {
             clearGatesaleIdleTimer();
             stopGatesaleEnrollment();
+            if (gatesaleFaceGuide) {
+                gatesaleFaceGuide.reset();
+            }
             capturedGatesalePoses = null;
             showView('main-view');
             finishInteraction();
