@@ -21,6 +21,7 @@ class UpdateFacilityRequest extends FormRequest
             'location' => 'nullable|string|max:255',
             'is_rtl' => 'boolean',
             'is_active' => 'boolean',
+            'is_gs' => 'boolean',
         ];
     }
 }

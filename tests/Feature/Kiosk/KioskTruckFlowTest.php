@@ -455,4 +455,36 @@ class KioskTruckFlowTest extends TestCase
         $this->assertNull($response->json('directory.plate_no'));
         $this->assertEquals('Gatesale', $response->json('directory.visitor_type'));
     }
+
+    // ---- facility_list.is_gs only gates Gatesale - Truck must be unaffected ----
+    public function test_truck_flow_is_unaffected_by_a_facility_with_gatesale_disabled(): void
+    {
+        $this->facility->update(['is_gs' => false]);
+        $directory = $this->makeTruckDirectory(0.80);
+
+        $recognize = $this->recognize(['descriptor' => $this->descriptor(0.80)]);
+        $recognize->assertOk()->assertJson(['success' => false, 'type' => 'gatesale_confirm_identity']);
+
+        $visit = $this->createVisit([
+            'directory_id' => $directory->directory_id,
+            'host_name' => 'H', 'origin' => 'O', 'purpose' => 'P',
+        ]);
+        $visit->assertOk()->assertJson(['success' => true, 'type' => 'gatesale_match']);
+        $this->assertEquals(1, VisitorRequest::where('directory_id', $directory->directory_id)->count());
+    }
+
+    public function test_truck_registration_is_unaffected_by_a_facility_with_gatesale_disabled(): void
+    {
+        $this->facility->update(['is_gs' => false]);
+
+        $response = $this->registerIdentity([
+            'full_name' => 'Unaffected Trucker',
+            'company' => 'Reyes Logistics',
+            'plate_no' => 'DEF-4321',
+            'descriptor' => $this->descriptor(0.81),
+        ]);
+
+        $response->assertOk()->assertJson(['success' => true]);
+        $this->assertEquals(1, UserDirectory::where('full_name', 'Unaffected Trucker')->count());
+    }
 }

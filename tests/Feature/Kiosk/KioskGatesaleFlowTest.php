@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Kiosk;
 
+use App\Http\Controllers\Kiosk\KioskController;
 use App\Models\FaceProfile;
 use App\Models\FaceProfileEmbedding;
 use App\Models\FacilityList;
@@ -702,5 +703,149 @@ class KioskGatesaleFlowTest extends TestCase
 
         $this->entry($visitorRequest->visitor_request_id, 'first_entry')->assertOk();
         $this->entry($visitorRequest->visitor_request_id, 'final_exit')->assertOk();
+    }
+
+    // ---- facility_list.is_gs eligibility gate ----
+
+    public function test_gatesale_recognition_is_rejected_when_facility_is_not_gatesale_enabled(): void
+    {
+        $this->facility->update(['is_gs' => false]);
+        $directory = $this->makeGatesaleDirectory(0.90);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.90)]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'gatesale_not_available']);
+        $this->assertEquals(0, VisitorRequest::count());
+    }
+
+    public function test_gatesale_create_visit_is_rejected_directly_when_facility_is_not_gatesale_enabled(): void
+    {
+        // Defense-in-depth: reject even when a client calls create-visit
+        // directly with a known directory_id, bypassing recognize() entirely.
+        $this->facility->update(['is_gs' => false]);
+        $directory = $this->makeGatesaleDirectory(0.91);
+
+        $response = $this->createVisit([
+            'directory_id' => $directory->directory_id,
+            'host_name' => 'H', 'origin' => 'O', 'purpose' => 'P',
+        ]);
+
+        $response->assertStatus(403);
+        $this->assertEquals(0, VisitorRequest::count());
+    }
+
+    public function test_gatesale_register_identity_is_rejected_when_facility_is_not_gatesale_enabled(): void
+    {
+        $this->facility->update(['is_gs' => false]);
+
+        $response = $this->registerIdentity([
+            'full_name' => 'Should Not Register',
+            'company' => 'New Co',
+            'descriptor' => $this->descriptor(0.92),
+        ]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'gatesale_not_available']);
+        $this->assertEquals(0, UserDirectory::count());
+        $this->assertEquals(0, FaceProfile::count());
+    }
+
+    public function test_gatesale_resuming_an_already_active_visit_is_unaffected_by_a_later_flag_flip(): void
+    {
+        // The flag only gates NEW visits - a visit created while the
+        // facility was eligible must not be disrupted mid-visit if an admin
+        // later flips is_gs off.
+        $directory = $this->makeGatesaleDirectory(0.93);
+        $activeRequest = $this->makeActiveGatesaleRequest($directory);
+        VisitorSession::create([
+            'visitor_request_id' => $activeRequest->visitor_request_id,
+            'session_status' => 'Inside',
+            'login_id' => 'EXIST002',
+            'first_in' => now(),
+        ]);
+
+        $this->facility->update(['is_gs' => false]);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.93)]);
+
+        $response->assertOk()->assertJson(['success' => true, 'type' => 'gatesale_match']);
+    }
+
+    public function test_gatesale_full_flow_succeeds_when_facility_is_gatesale_enabled(): void
+    {
+        $this->facility->update(['is_gs' => true]);
+
+        $register = $this->registerIdentity([
+            'full_name' => 'Eligible Facility Visitor',
+            'company' => 'New Co',
+            'descriptor' => $this->descriptor(0.94),
+        ]);
+        $register->assertOk()->assertJson(['success' => true]);
+        $directoryId = $register->json('directory.directory_id');
+
+        $visit = $this->createVisit([
+            'directory_id' => $directoryId,
+            'host_name' => 'Host', 'origin' => 'Origin', 'purpose' => 'Purpose',
+        ]);
+
+        $visit->assertOk()->assertJson(['success' => true, 'type' => 'gatesale_match']);
+        $this->assertEquals(1, VisitorRequest::where('directory_id', $directoryId)->count());
+    }
+
+    public function test_visitor_with_approval_flow_is_unaffected_by_facility_gatesale_flag(): void
+    {
+        // The is_gs flag only ever gates the Gatesale self-service branch -
+        // the plain Visitor-with-Approval flow must keep working normally
+        // at a facility with Gatesale disabled.
+        $this->facility->update(['is_gs' => false]);
+
+        $email = 'approved+' . uniqid() . '@example.com';
+        $directory = UserDirectory::create([
+            'identity_type_id' => $this->visitorIdentityType->identity_type_id,
+            'person_reference' => $email,
+            'first_name' => 'Juan', 'last_name' => 'Dela Cruz', 'full_name' => 'Juan Dela Cruz',
+            'email' => $email,
+        ]);
+        VisitorProfile::create([
+            'directory_id' => $directory->directory_id,
+            'visitor_type_id' => $this->visitorType->visitor_type_id,
+        ]);
+        FaceProfile::create([
+            'directory_id' => $directory->directory_id,
+            'embedding' => $this->descriptor(0.95),
+            'is_active' => true,
+        ]);
+        $visitorRequest = VisitorRequest::create([
+            'directory_id' => $directory->directory_id,
+            'visitor_id' => 'VIS-' . uniqid(),
+            'facility_id' => $this->facility->facility_id,
+            'host_name' => 'Host',
+            'visit_datetime' => now(),
+            'registration_token' => 'REG_' . Str::upper(Str::random(8)),
+            'approval_status' => 'Approved',
+        ]);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.95)]);
+
+        $response->assertOk()->assertJson([
+            'success' => true,
+            'type' => 'face_match',
+            'visitor_request_id' => $visitorRequest->visitor_request_id,
+        ]);
+    }
+
+    public function test_gatesale_eligibility_check_treats_a_kiosk_with_no_resolvable_facility_as_not_eligible(): void
+    {
+        // Simulates an invalid/nonexistent facility reference - the check
+        // must fail safe (not eligible) rather than error or default open.
+        // Built in-memory (never persisted) since kiosk_device.facility_id
+        // has a NOT NULL + CASCADE foreign key and cannot actually reference
+        // a nonexistent facility_list row in a real database.
+        $kioskWithBadFacility = new KioskDevice(['facility_id' => 999999]);
+
+        $method = new \ReflectionMethod(KioskController::class, 'isGatesaleEligibleFacility');
+        $method->setAccessible(true);
+        $controller = $this->app->make(KioskController::class);
+
+        $this->assertFalse($method->invoke($controller, $kioskWithBadFacility));
     }
 }

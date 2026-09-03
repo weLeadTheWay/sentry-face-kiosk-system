@@ -37,7 +37,7 @@
         }
         .video-section {
             width: 100%;
-            max-width: 600px;
+            max-width: 700px;
             margin-bottom: 20px;
         }
         .video-container {
@@ -225,7 +225,7 @@
     </div>
 
     <div class="kiosk-container" id="gatesale-view" style="display:none;">
-        <div class="setup-prompt" style="max-width: 480px;">
+        <div class="setup-prompt" style="max-width: 760px;">
             <div id="gatesale-confirm-step">
                 <div class="setup-title">Is this you?</div>
                 <div id="gatesale-confirm-details" style="text-align:left; margin-bottom: 20px; color:#333; line-height:1.6;"></div>
@@ -252,7 +252,7 @@
             </div>
             <div id="gatesale-capture-step" style="display:none;">
                 <div class="setup-title">Face Enrollment</div>
-                <div style="position:relative; width:100%; max-width:340px; margin:0 auto 15px; border-radius:8px; overflow:hidden; background:#000;">
+                <div style="position:relative; width:100%; max-width:700px; margin:0 auto 15px; border-radius:8px; overflow:hidden; background:#000;">
                     <video id="enrollment-webcam" autoplay playsinline muted style="width:100%; display:block; transform:scaleX(-1);"></video>
                 </div>
                 <p id="gatesale-capture-status" style="margin-bottom:12px; color:#333; min-height:24px;">Initializing...</p>
@@ -266,7 +266,7 @@
             <div id="gatesale-register-step" style="display:none;">
                 <div class="setup-title">Visitor Registration</div>
                 <select class="setup-input" id="gatesale-reg-type" onchange="toggleGatesaleRegPlateNo()">
-                    <option value="Gatesale">Gatesale</option>
+                    <option value="Gatesale" {{ $kiosk->facility?->is_gs ? '' : 'disabled' }}>Gatesale{{ $kiosk->facility?->is_gs ? '' : ' (not available at this facility)' }}</option>
                     <option value="Truck">Truck / Delivery</option>
                 </select>
                 <input type="text" class="setup-input" id="gatesale-reg-name" placeholder="Full Name">
@@ -285,6 +285,12 @@
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
+        // facility_list.is_gs - whether Gatesale self-service is allowed at
+        // this kiosk's facility (Truck is unaffected, always available).
+        // Drives the disabled attribute on the Gatesale <option> above; the
+        // backend independently re-checks this on register-identity/create-
+        // visit regardless of what the client sends.
+        const gatesaleEnabled = {{ $kiosk->facility?->is_gs ? 'true' : 'false' }};
         let kioskToken = localStorage.getItem('kiosk_token_' + kioskId);
         let currentVisitorRequest = null;
         let isProcessingAction = false;
@@ -1043,7 +1049,10 @@
             gatesaleEnrollmentController = null;
             capturedGatesalePoses = poses;
 
-            document.getElementById('gatesale-reg-type').value = 'Gatesale';
+            // Default to Gatesale only where it's actually selectable -
+            // otherwise the Gatesale <option> is disabled (see the
+            // gatesaleEnabled flag) and Truck is the only real choice.
+            document.getElementById('gatesale-reg-type').value = gatesaleEnabled ? 'Gatesale' : 'Truck';
             ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company', 'gatesale-reg-plate-no'].forEach(id => {
                 document.getElementById(id).value = '';
             });
@@ -1078,6 +1087,14 @@
 
             if (!fullName || !company) {
                 alert('Full Name and Company are required.');
+                return;
+            }
+
+            if (visitorType === 'Gatesale' && !gatesaleEnabled) {
+                // Should be unreachable via the UI (the option is disabled),
+                // but the backend rejects this anyway - this is just a
+                // clearer message than letting the fetch below 403 silently.
+                alert('Gatesale self-service is not available at this facility.');
                 return;
             }
 

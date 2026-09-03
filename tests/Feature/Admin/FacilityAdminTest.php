@@ -183,6 +183,43 @@ class FacilityAdminTest extends TestCase
         $this->assertTrue($facility->is_active);
     }
 
+    public function test_create_facility_defaults_is_gs_to_false_when_omitted(): void
+    {
+        $response = $this->post(route('facilities.store'), [
+            'facility_code' => 'NOGSFLAG',
+            'facility_name' => 'No GS Flag Facility',
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+        ]);
+
+        $response->assertOk();
+        $this->assertFalse(FacilityList::where('facility_code', 'NOGSFLAG')->sole()->is_gs);
+    }
+
+    public function test_create_and_update_facility_can_set_is_gs(): void
+    {
+        $response = $this->post(route('facilities.store'), [
+            'facility_code' => 'GSCODE',
+            'facility_name' => 'GS Facility',
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+            'is_gs' => '1',
+        ]);
+        $response->assertOk();
+        $facility = FacilityList::where('facility_code', 'GSCODE')->sole();
+        $this->assertTrue($facility->is_gs);
+
+        $update = $this->put(route('facilities.update', $facility), [
+            'facility_code' => 'GSCODE',
+            'facility_name' => 'GS Facility',
+            'facility_type_id' => $this->type->facility_type_id,
+            'facility_category_id' => $this->category->facility_category_id,
+            'is_gs' => '0',
+        ]);
+        $update->assertOk();
+        $this->assertFalse($facility->fresh()->is_gs);
+    }
+
     public function test_facility_code_must_be_unique(): void
     {
         FacilityList::create([

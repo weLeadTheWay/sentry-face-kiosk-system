@@ -29,7 +29,7 @@ class KioskController extends Controller
 
     public function show(KioskDevice $kiosk)
     {
-        return view('kiosk.show', ['kiosk' => $kiosk]);
+        return view('kiosk.show', ['kiosk' => $kiosk->load('facility')]);
     }
 
     /**
@@ -203,7 +203,18 @@ class KioskController extends Controller
                 return $this->gatesaleActiveElsewhereResponse($activeRequest);
             }
 
+            // A visit already in progress (created while the facility was
+            // eligible) is never retroactively disrupted by a later flag
+            // flip - the eligibility gate below only applies to STARTING a
+            // new visit, checked further down for the "no active request"
+            // (Is this you?) branch.
             return $this->buildRecognitionResponse($activeRequest, 'gatesale_match', $directory, $kiosk);
+        }
+
+        $visitorTypeName = $directory->visitorProfile?->visitorType?->visitor_type_name;
+
+        if ($visitorTypeName === 'Gatesale' && !$this->isGatesaleEligibleFacility($kiosk)) {
+            return $this->gatesaleNotEligibleResponse();
         }
 
         return response()->json([
@@ -241,6 +252,28 @@ class KioskController extends Controller
             'success' => false,
             'type' => 'gatesale_active_elsewhere',
             'message' => "This visitor is currently active at {$activeFarmName} and cannot enter here until that visit ends.",
+        ], 403);
+    }
+
+    /**
+     * Gatesale eligibility is a per-facility flag (facility_list.is_gs) -
+     * Truck is NOT gated by it, since it has no flag of its own and this
+     * check must never affect Truck's existing behavior. Checked
+     * independently at every direct entry point into the Gatesale flow
+     * (recognition routing, visit creation, new-identity registration) so a
+     * client cannot bypass it by skipping straight to a later endpoint.
+     */
+    private function isGatesaleEligibleFacility(KioskDevice $kiosk): bool
+    {
+        return (bool) $kiosk->facility?->is_gs;
+    }
+
+    private function gatesaleNotEligibleResponse(): \Illuminate\Http\JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'type' => 'gatesale_not_available',
+            'message' => 'Gatesale self-service is not available at this facility.',
         ], 403);
     }
 
@@ -295,6 +328,16 @@ class KioskController extends Controller
                         }
 
                         return $existing;
+                    }
+
+                    // Only gates a genuinely NEW visit - an already-active
+                    // request resumed above (e.g. created while the facility
+                    // was eligible) is never retroactively disrupted.
+                    if (
+                        $directory->visitorProfile?->visitorType?->visitor_type_name === 'Gatesale'
+                        && !$this->isGatesaleEligibleFacility($kiosk)
+                    ) {
+                        abort(403, 'Gatesale self-service is not available at this facility.');
                     }
 
                     if (!$hostName || !$origin || !$purpose) {
@@ -462,6 +505,15 @@ class KioskController extends Controller
                 'type' => 'identity_not_supported',
                 'message' => 'Identity could not be confirmed. Please contact the administrator.',
             ], 422);
+        }
+
+        // Only reached when registering a brand-new identity - a matched
+        // existing directory is routed through handleSelfServiceRecognition()
+        // above, which independently checks eligibility against that
+        // directory's OWN visitor type (which may be Truck, unaffected by
+        // this flag, even if $visitorType here was requested as Gatesale).
+        if ($visitorType === 'Gatesale' && !$this->isGatesaleEligibleFacility($kiosk)) {
+            return $this->gatesaleNotEligibleResponse();
         }
 
         return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $poses, $frontDescriptor) {

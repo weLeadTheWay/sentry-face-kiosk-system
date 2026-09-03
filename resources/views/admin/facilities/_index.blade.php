@@ -51,6 +51,7 @@
                 <th>Type</th>
                 <th>Category</th>
                 <th>RTL</th>
+                <th>Gatesale</th>
                 <th>Location</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -106,6 +107,7 @@
                     { data: 'facility_type', orderable: false },
                     { data: 'facility_category', orderable: false },
                     { data: 'is_rtl', orderable: false, render: function (d) { return d ? 'Yes' : 'No'; } },
+                    { data: 'is_gs', orderable: false, render: function (d) { return d ? 'Yes' : 'No'; } },
                     { data: 'location', orderable: false, render: function (d) { return d ? escapeHtml(d) : '-'; } },
                     { data: null, orderable: false, render: renderStatus },
                     { data: null, orderable: false, render: renderActions }

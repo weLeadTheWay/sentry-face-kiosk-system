@@ -24,6 +24,7 @@ class FacilityList extends Model
         'location',
         'is_rtl',
         'is_active',
+        'is_gs',
     ];
 
     protected function casts(): array
@@ -31,6 +32,7 @@ class FacilityList extends Model
         return [
             'is_rtl' => 'boolean',
             'is_active' => 'boolean',
+            'is_gs' => 'boolean',
         ];
     }
 

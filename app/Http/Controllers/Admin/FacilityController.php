@@ -31,7 +31,7 @@ class FacilityController extends Controller
     public function data(): JsonResponse
     {
         $base = FacilityList::query()
-            ->select(['facility_id', 'facility_type_id', 'facility_category_id', 'facility_code', 'facility_name', 'location', 'is_rtl', 'is_active'])
+            ->select(['facility_id', 'facility_type_id', 'facility_category_id', 'facility_code', 'facility_name', 'location', 'is_rtl', 'is_active', 'is_gs'])
             ->with([
                 'facilityType:facility_type_id,facility_type_name',
                 'facilityCategory:facility_category_id,facility_category_name',
@@ -90,6 +90,7 @@ class FacilityController extends Controller
                 'is_rtl' => (bool) $facility->is_rtl,
                 'location' => $facility->location,
                 'is_active' => (bool) $facility->is_active,
+                'is_gs' => (bool) $facility->is_gs,
             ])->all(),
         ]);
     }

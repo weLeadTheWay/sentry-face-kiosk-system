@@ -67,6 +67,13 @@
             </label>
         </div>
 
+        <div class="form-group">
+            <label>
+                <input type="hidden" name="is_gs" value="0"><input type="checkbox" name="is_gs" value="1" {{ old('is_gs') ? 'checked' : '' }}>
+                Gatesale Enabled
+            </label>
+        </div>
+
         <div class="form-actions">
             <button type="submit" class="btn">Create</button>
             <a href="{{ route('facilities.index') }}" class="btn btn-secondary ajax-link">Cancel</a>
