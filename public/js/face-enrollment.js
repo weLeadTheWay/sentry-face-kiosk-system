@@ -74,12 +74,16 @@
         MIN_FACE_WIDTH_RATIO: 0.20,
         MAX_FACE_WIDTH_RATIO: 0.75,
 
-        // Yaw proxy thresholds (see computeYawOffset below). FRONT requires
-        // |offset| <= YAW_CENTER_TOLERANCE; LEFT/RIGHT require
-        // offset <= -YAW_TURN_THRESHOLD / >= +YAW_TURN_THRESHOLD
-        // respectively. Reasoned starting defaults, not measured against
-        // real footage yet - tune these first if pose detection feels too
-        // strict/loose.
+        // Yaw proxy thresholds (see computeYawOffset/yawMatchesTarget below).
+        // FRONT requires |offset| <= YAW_CENTER_TOLERANCE; physical LEFT
+        // requires offset >= +YAW_TURN_THRESHOLD, physical RIGHT requires
+        // offset <= -YAW_TURN_THRESHOLD (face-api.js reads the raw,
+        // unmirrored camera frame - landmark index 0 sits at that frame's
+        // left edge, which is the subject's own RIGHT side, same as facing
+        // another person - see yawMatchesTarget's comment; verified against
+        // real Phase C testing, not just derived). Threshold magnitudes are
+        // reasoned starting defaults, not measured against real footage yet
+        // - tune these first if pose detection feels too strict/loose.
         YAW_CENTER_TOLERANCE: 0.08,
         YAW_TURN_THRESHOLD: 0.18,
 
@@ -119,10 +123,10 @@
      * face-api.js gives 2D landmarks only, no direct head-pose/yaw angle.
      * This is the standard "nose tip position relative to jaw width" proxy:
      * ~0 when facing the camera straight on, negative/positive as the head
-     * rotates (sign convention is arbitrary but consistent - see the LEFT/
-     * RIGHT prompts in POSE_INSTRUCTIONS, which are what actually teaches
-     * the user which physical direction to turn; verify empirically against
-     * the mirrored preview if the LEFT/RIGHT labels ever feel swapped).
+     * rotates. Formula is unchanged from the original implementation -
+     * only yawMatchesTarget()'s sign mapping below was corrected (Phase C
+     * testing found LEFT/RIGHT were swapped from the user's physical
+     * perspective).
      */
     function computeYawOffset(landmarks) {
         var points = landmarks.positions;
@@ -136,15 +140,32 @@
         return ((nose.x - jawLeft.x) / faceWidth) - 0.5;
     }
 
+    /**
+     * Maps computeYawOffset()'s signed value to a physical direction.
+     *
+     * face-api.js detects against the RAW camera frame, not the mirrored
+     * on-screen preview (the video element's CSS `transform: scaleX(-1)`
+     * only changes what's rendered, not the pixel data face-api.js reads).
+     * In the raw frame the camera is effectively facing the user, the same
+     * as two people facing each other - so the user's own RIGHT side falls
+     * on the LEFT side of the raw frame (smaller x), same convention as the
+     * standard 68-point jaw ordering (landmark index 0 = frame-left = the
+     * subject's own right jaw; index 16 = frame-right = the subject's own
+     * left jaw). That means nose.x shifts toward jawLeft (index 0, smaller
+     * x) - a NEGATIVE offset - when the user turns their physical RIGHT,
+     * and toward jawRight (index 16, larger x) - a POSITIVE offset - when
+     * they turn their physical LEFT. Confirmed against real Phase C manual
+     * testing (the previous version had this exact mapping inverted).
+     */
     function yawMatchesTarget(offset, targetPose) {
         if (targetPose === 'FRONT') {
             return Math.abs(offset) <= CONFIG.YAW_CENTER_TOLERANCE;
         }
         if (targetPose === 'LEFT') {
-            return offset <= -CONFIG.YAW_TURN_THRESHOLD;
+            return offset >= CONFIG.YAW_TURN_THRESHOLD;
         }
         if (targetPose === 'RIGHT') {
-            return offset >= CONFIG.YAW_TURN_THRESHOLD;
+            return offset <= -CONFIG.YAW_TURN_THRESHOLD;
         }
         return false;
     }
