@@ -628,7 +628,7 @@ ACTIVE + Outside with a real OUT log        → COMPLETED_AUTO  (Sheets write, u
 **Dependencies:** None of its own — a pure lookup/reference structure, same as `farm_list` was.
 
 **Related Modules:** Now the live dependency of **Visitor Sync** (`FacilityResolver`), **Kiosk Entry** (`visitor_request.facility_id`/`kiosk_device.facility_id` binding checks), **Kiosk Self-Service** (shares the same binding checks), and **Admin Management**'s Biosecurity Rules submodules (Downtime Matrix/Downtime Stationary). The old Farms/Farm Aliases admin screens (`FarmController`/`FarmAliasController`) were removed entirely in Phase 5 — `farm_list`/`farm_aliases` are now pure legacy tables with no admin UI and no code reading/writing them at all.
-
+`
 **Business Rules:**
 - `facility_code` and `facility_type_name`/`facility_category_name` are DB-unique, same pattern as `farm_list.farm_code`.
 - A facility's `facility_category`/`is_rtl` are per-facility properties, not inferred from `facility_type` — e.g. GEFI has both a PLANT (`GEFI - MCP`) and, under the separate `GEFI-LIVE` type, RTL FARMs. Do not assume every facility under one type shares a category or RTL setting.
@@ -659,7 +659,7 @@ ACTIVE + Outside with a real OUT log        → COMPLETED_AUTO  (Sheets write, u
 **Important Notes for Future Changes:** The only remaining farm→facility decision is whether/when to drop the now fully-legacy `farm_list`/`farm_aliases` tables themselves (kept intentionally as of Phase 5, per the source instructions' rollback guidance — nothing reads or writes them, admin UI included). Do not re-derive the farm_id→facility_id mapping from name matching in new code — treat the table above as the historical record of a fact, not a formula. When adding fields to the Facility form, follow `FacilityController`'s exact pattern (Store/Update Request + view three-way split). **If you ever write another migration that renames a FK column backed by a unique/composite-unique index on MySQL**, drop the FK in its own prior `Schema::table()` statement before touching the index or column (InnoDB blocks dropping an index a live FK still needs), and check any auto-generated constraint name against MySQL's 64-character identifier limit before relying on it — both bit the Phase 4 migration and neither was caught by the sqlite-backed test suite.
 
 ---
-
+`
 ### Module: `Admin Management` (Facilities, Kiosks, Roles, Users, Reference Data, Biosecurity Rules, Audit Logs)
 
 **Purpose:** Authenticated back-office CRUD for every piece of reference/configuration data the kiosk-facing modules depend on.

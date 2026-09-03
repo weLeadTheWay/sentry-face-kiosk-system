@@ -157,7 +157,7 @@ class DowntimeMatrixImportService
     public function produce(DowntimeMatrixImport $import, User $producer): array
     {
         try {
-            return DB::transaction(function () use ($import, $producer) {
+            $result = DB::transaction(function () use ($import, $producer) {
                 $rows = DowntimeMatrixImportRow::where('import_id', $import->import_id)
                     ->whereIn('resolution_status', self::PRODUCIBLE_STATUSES)
                     ->get();
@@ -234,6 +234,22 @@ class DowntimeMatrixImportService
                     ->where('import_id', '!=', $import->import_id)
                     ->get();
 
+                // Logged unconditionally (not just on failure) - previously
+                // this step only left a trace in the log if it threw, so a
+                // run that silently found zero rows to revert (which should
+                // never happen if exactly one other import was PRODUCED)
+                // left no forensic evidence at all. This still ran and
+                // logged even though it found the correct row in every
+                // direct-call reproduction attempted while investigating a
+                // 2026-09-02 incident where two imports were somehow left
+                // PRODUCED at once with no exception in the log - root cause
+                // was never conclusively found, so this is here to catch it
+                // red-handed if it recurs.
+                Log::info('Downtime Matrix Import: producing import, reverting any other PRODUCED imports', [
+                    'import_id' => $import->import_id,
+                    'reverted_import_ids' => $revertedImports->pluck('import_id')->all(),
+                ]);
+
                 foreach ($revertedImports as $priorImport) {
                     $priorImport->update([
                         'status' => 'VERIFIED',
@@ -261,6 +277,26 @@ class DowntimeMatrixImportService
                     'reverted_imports' => $revertedImports->pluck('original_filename')->all(),
                 ];
             });
+
+            // Post-commit invariant check: after every produce() run, at
+            // most one import should ever be PRODUCED. This is a pure
+            // read after the transaction has already committed - it can
+            // only observe a violation, not prevent one - added specifically
+            // because a 2026-09-02 incident left two imports PRODUCED at
+            // once with no exception anywhere in the log, so a passing
+            // transaction alone isn't proof the invariant actually holds.
+            // If this ever fires, it is the concrete evidence needed to
+            // finally root-cause that class of bug.
+            $stillProduced = DowntimeMatrixImport::where('status', 'PRODUCED')->get(['import_id', 'original_filename']);
+            if ($stillProduced->count() > 1) {
+                Log::critical('Downtime Matrix Import: more than one import is PRODUCED after produce() committed - single-active-PRODUCED invariant violated', [
+                    'triggering_import_id' => $import->import_id,
+                    'produced_import_ids' => $stillProduced->pluck('import_id')->all(),
+                    'produced_import_filenames' => $stillProduced->pluck('original_filename')->all(),
+                ]);
+            }
+
+            return $result;
         } catch (\Throwable $e) {
             Log::error('Downtime Matrix Import production mapping failed', [
                 'import_id' => $import->import_id,
