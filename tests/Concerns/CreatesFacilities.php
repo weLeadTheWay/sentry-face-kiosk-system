@@ -14,12 +14,26 @@ use App\Models\FacilityType;
 trait CreatesFacilities
 {
     /**
-     * Defaults is_gs to true - most tests using this trait don't care about
-     * Gatesale eligibility and predate that flag; only tests specifically
-     * covering the eligibility check need to pass false explicitly.
+     * Defaults is_gs and is_truck to true - most tests using this trait
+     * don't care about Gatesale/Truck eligibility and predate both flags'
+     * enforcement; only tests specifically covering an eligibility check
+     * need to pass false explicitly. This is a test-factory convenience
+     * only - the real facility_list.is_gs/is_truck DB columns still default
+     * to false in production (see their migrations); a fresh real facility
+     * genuinely starts with both self-service processes disabled.
+     *
+     * Defaults is_break_enabled to true - it preserves the pre-existing
+     * multi-break behavior every other test in this codebase already
+     * assumes; only tests specifically covering the break restriction need
+     * to pass false explicitly.
      */
-    protected function createFacility(string $code, ?string $name = null, bool $isGs = true): FacilityList
-    {
+    protected function createFacility(
+        string $code,
+        ?string $name = null,
+        bool $isGs = true,
+        bool $isBreakEnabled = true,
+        bool $isTruck = true
+    ): FacilityList {
         return FacilityList::firstOrCreate(
             ['facility_code' => $code],
             [
@@ -28,6 +42,8 @@ trait CreatesFacilities
                 'facility_category_id' => FacilityCategory::firstOrCreate(['facility_category_name' => 'FARM'])->facility_category_id,
                 'is_rtl' => true,
                 'is_gs' => $isGs,
+                'is_break_enabled' => $isBreakEnabled,
+                'is_truck' => $isTruck,
             ]
         );
     }

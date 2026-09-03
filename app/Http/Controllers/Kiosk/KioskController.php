@@ -217,6 +217,10 @@ class KioskController extends Controller
             return $this->gatesaleNotEligibleResponse();
         }
 
+        if ($visitorTypeName === 'Truck' && !$this->isTruckEligibleFacility($kiosk)) {
+            return $this->truckNotEligibleResponse();
+        }
+
         return response()->json([
             'success' => false,
             'type' => 'gatesale_confirm_identity',
@@ -256,12 +260,12 @@ class KioskController extends Controller
     }
 
     /**
-     * Gatesale eligibility is a per-facility flag (facility_list.is_gs) -
-     * Truck is NOT gated by it, since it has no flag of its own and this
-     * check must never affect Truck's existing behavior. Checked
-     * independently at every direct entry point into the Gatesale flow
-     * (recognition routing, visit creation, new-identity registration) so a
-     * client cannot bypass it by skipping straight to a later endpoint.
+     * Gatesale eligibility is a per-facility flag (facility_list.is_gs),
+     * independent of Truck's own facility_list.is_truck flag - a facility
+     * can allow one, both, or neither. Checked independently at every
+     * direct entry point into the Gatesale flow (recognition routing,
+     * visit creation, new-identity registration) so a client cannot bypass
+     * it by skipping straight to a later endpoint.
      */
     private function isGatesaleEligibleFacility(KioskDevice $kiosk): bool
     {
@@ -274,6 +278,28 @@ class KioskController extends Controller
             'success' => false,
             'type' => 'gatesale_not_available',
             'message' => 'Gatesale self-service is not available at this facility.',
+        ], 403);
+    }
+
+    /**
+     * Truck eligibility is a per-facility flag (facility_list.is_truck),
+     * mirroring isGatesaleEligibleFacility() exactly - same three direct
+     * entry points, same null-safe "not eligible on unresolved facility"
+     * behavior, kept as a separate flag/helper rather than reusing is_gs
+     * since a facility can allow Gatesale, Truck, both, or neither
+     * independently.
+     */
+    private function isTruckEligibleFacility(KioskDevice $kiosk): bool
+    {
+        return (bool) $kiosk->facility?->is_truck;
+    }
+
+    private function truckNotEligibleResponse(): \Illuminate\Http\JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'type' => 'truck_not_available',
+            'message' => 'Truck self-service is not available at this facility.',
         ], 403);
     }
 
@@ -333,11 +359,14 @@ class KioskController extends Controller
                     // Only gates a genuinely NEW visit - an already-active
                     // request resumed above (e.g. created while the facility
                     // was eligible) is never retroactively disrupted.
-                    if (
-                        $directory->visitorProfile?->visitorType?->visitor_type_name === 'Gatesale'
-                        && !$this->isGatesaleEligibleFacility($kiosk)
-                    ) {
+                    $visitorTypeName = $directory->visitorProfile?->visitorType?->visitor_type_name;
+
+                    if ($visitorTypeName === 'Gatesale' && !$this->isGatesaleEligibleFacility($kiosk)) {
                         abort(403, 'Gatesale self-service is not available at this facility.');
+                    }
+
+                    if ($visitorTypeName === 'Truck' && !$this->isTruckEligibleFacility($kiosk)) {
+                        abort(403, 'Truck self-service is not available at this facility.');
                     }
 
                     if (!$hostName || !$origin || !$purpose) {
@@ -510,10 +539,14 @@ class KioskController extends Controller
         // Only reached when registering a brand-new identity - a matched
         // existing directory is routed through handleSelfServiceRecognition()
         // above, which independently checks eligibility against that
-        // directory's OWN visitor type (which may be Truck, unaffected by
-        // this flag, even if $visitorType here was requested as Gatesale).
+        // directory's OWN visitor type (which may differ from the
+        // requested $visitorType here).
         if ($visitorType === 'Gatesale' && !$this->isGatesaleEligibleFacility($kiosk)) {
             return $this->gatesaleNotEligibleResponse();
+        }
+
+        if ($visitorType === 'Truck' && !$this->isTruckEligibleFacility($kiosk)) {
+            return $this->truckNotEligibleResponse();
         }
 
         return DB::transaction(function () use ($visitorType, $fullName, $email, $phone, $company, $plateNo, $poses, $frontDescriptor) {
@@ -631,6 +664,12 @@ class KioskController extends Controller
             'visitor_request_id' => $visitorRequest->visitor_request_id,
             'session_state' => $sessionState,
             'directory' => $directory,
+            // facility_list.is_break_enabled for THIS visit's facility - the
+            // kiosk frontend uses this to decide whether to render the "Go
+            // Outside" button at all. This is a UX convenience only; the
+            // real enforcement is the temporary_exit guard in
+            // VisitorKioskService::processEntry().
+            'break_enabled' => (bool) $kiosk->facility?->is_break_enabled,
         ]);
     }
 

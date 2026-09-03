@@ -94,4 +94,8 @@ Route::middleware('auth')->group(function () {
 
     Route::get('admin/facility-aliases/data', [\App\Http\Controllers\Admin\FacilityAliasController::class, 'data'])->name('facility-aliases.data')->middleware('permission:facilities.manage');
     Route::resource('admin/facility-aliases', \App\Http\Controllers\Admin\FacilityAliasController::class)->except('show')->middleware('permission:facilities.manage')->parameter('facility_alias', 'facility_alias');
+
+    Route::get('admin/facility-configuration/data', [\App\Http\Controllers\Admin\FacilityConfigurationController::class, 'data'])->name('facility-configuration.data')->middleware('permission:facilities.manage');
+    Route::get('admin/facility-configuration', [\App\Http\Controllers\Admin\FacilityConfigurationController::class, 'index'])->name('facility-configuration.index')->middleware('permission:facilities.manage');
+    Route::patch('admin/facility-configuration/{facility}', [\App\Http\Controllers\Admin\FacilityConfigurationController::class, 'update'])->name('facility-configuration.update')->middleware('permission:facilities.manage');
 });

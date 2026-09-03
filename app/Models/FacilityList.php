@@ -25,6 +25,8 @@ class FacilityList extends Model
         'is_rtl',
         'is_active',
         'is_gs',
+        'is_break_enabled',
+        'is_truck',
     ];
 
     protected function casts(): array
@@ -33,6 +35,8 @@ class FacilityList extends Model
             'is_rtl' => 'boolean',
             'is_active' => 'boolean',
             'is_gs' => 'boolean',
+            'is_break_enabled' => 'boolean',
+            'is_truck' => 'boolean',
         ];
     }
 

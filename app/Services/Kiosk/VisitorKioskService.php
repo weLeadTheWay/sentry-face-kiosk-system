@@ -138,6 +138,17 @@ class VisitorKioskService
                 return ['success' => false, 'message' => 'Invalid action for current status'];
             }
 
+            // facility_list.is_break_enabled gates STARTING a new break only -
+            // an already-Outside session (started while breaks were enabled)
+            // is never retroactively invalidated by a later flag flip; that
+            // case never reaches this branch since session_status is already
+            // 'Outside', not 'Inside'. Enforced here even though the kiosk
+            // frontend already hides the "Go Outside" button for this case -
+            // this is the actual, load-bearing check.
+            if (!$visitorRequest->facility?->is_break_enabled) {
+                return ['success' => false, 'message' => 'Breaks are not allowed at this facility for this visit.'];
+            }
+
             $activeSession->update(['session_status' => 'Outside']);
 
             VisitorEntryLog::create([

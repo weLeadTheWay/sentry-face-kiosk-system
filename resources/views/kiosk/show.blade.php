@@ -267,7 +267,7 @@
                 <div class="setup-title">Visitor Registration</div>
                 <select class="setup-input" id="gatesale-reg-type" onchange="toggleGatesaleRegPlateNo()">
                     <option value="Gatesale" {{ $kiosk->facility?->is_gs ? '' : 'disabled' }}>Gatesale{{ $kiosk->facility?->is_gs ? '' : ' (not available at this facility)' }}</option>
-                    <option value="Truck">Truck / Delivery</option>
+                    <option value="Truck" {{ $kiosk->facility?->is_truck ? '' : 'disabled' }}>Truck / Delivery{{ $kiosk->facility?->is_truck ? '' : ' (not available at this facility)' }}</option>
                 </select>
                 <input type="text" class="setup-input" id="gatesale-reg-name" placeholder="Full Name">
                 <input type="email" class="setup-input" id="gatesale-reg-email" placeholder="Email (optional)">
@@ -285,12 +285,13 @@
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script>
         const kioskId = '{{ $kiosk->kiosk_id }}';
-        // facility_list.is_gs - whether Gatesale self-service is allowed at
-        // this kiosk's facility (Truck is unaffected, always available).
-        // Drives the disabled attribute on the Gatesale <option> above; the
-        // backend independently re-checks this on register-identity/create-
+        // facility_list.is_gs / facility_list.is_truck - whether Gatesale /
+        // Truck self-service is allowed at this kiosk's facility. Each
+        // drives the disabled attribute on its own <option> above; the
+        // backend independently re-checks both on register-identity/create-
         // visit regardless of what the client sends.
         const gatesaleEnabled = {{ $kiosk->facility?->is_gs ? 'true' : 'false' }};
+        const truckEnabled = {{ $kiosk->facility?->is_truck ? 'true' : 'false' }};
         let kioskToken = localStorage.getItem('kiosk_token_' + kioskId);
         let currentVisitorRequest = null;
         let isProcessingAction = false;
@@ -400,7 +401,16 @@
             el.className = 'status-message ' + (type === 'error' ? 'error' : type === 'success' ? 'welcome' : '');
         }
 
-        function showActionButtons(state) {
+        // breakEnabled reflects facility_list.is_break_enabled for the
+        // current visit's facility (sent once, at recognize time, as
+        // currentVisitorRequest.break_enabled - not part of session_state
+        // since it's a static-per-visit fact, not something that changes
+        // across IN/OUT transitions). When false, the intermediate "Go
+        // Outside" option is never rendered while Inside - only "Leave
+        // Farm" - so the visitation is strictly one IN -> one OUT. This is
+        // a UX convenience only; the real enforcement is the
+        // temporary_exit guard in VisitorKioskService::processEntry().
+        function showActionButtons(state, breakEnabled) {
             const buttonsHtml = [];
 
             // null/undefined means "no one is recognized yet" (idle, QR-scan
@@ -412,7 +422,9 @@
             } else if (state.status === 'no_session') {
                 buttonsHtml.push('<button class="btn btn-primary" onclick="processAction(\'first_entry\')">✓ Enter Farm</button>');
             } else if (state.status === 'Inside') {
-                buttonsHtml.push('<button class="btn btn-warning" onclick="processAction(\'temporary_exit\')">🚪 Go Outside</button>');
+                if (breakEnabled) {
+                    buttonsHtml.push('<button class="btn btn-warning" onclick="processAction(\'temporary_exit\')">🚪 Go Outside</button>');
+                }
                 buttonsHtml.push('<button class="btn btn-danger" onclick="processAction(\'final_exit\')">👋 Leave Farm</button>');
             } else if (state.status === 'Outside') {
                 buttonsHtml.push('<button class="btn btn-primary" onclick="processAction(\'return\')">↩️ Return</button>');
@@ -497,7 +509,7 @@
                     currentVisitorRequest.session_state = {
                         status: result.session_status,
                     };
-                    showActionButtons(currentVisitorRequest.session_state);
+                    showActionButtons(currentVisitorRequest.session_state, currentVisitorRequest.break_enabled);
 
                     // After action completes, return to scanning for the next visitor
                     setTimeout(() => {
@@ -683,7 +695,7 @@
                 lastRecognizedDirectoryId = result.directory.directory_id;
                 currentVisitorRequest = result;
                 updateStatus(`Welcome, ${result.directory.full_name}!`, 'success');
-                showActionButtons(result.session_state);
+                showActionButtons(result.session_state, result.break_enabled);
                 updateAuthToggle();
                 return;
             }
@@ -1049,10 +1061,16 @@
             gatesaleEnrollmentController = null;
             capturedGatesalePoses = poses;
 
-            // Default to Gatesale only where it's actually selectable -
-            // otherwise the Gatesale <option> is disabled (see the
-            // gatesaleEnabled flag) and Truck is the only real choice.
-            document.getElementById('gatesale-reg-type').value = gatesaleEnabled ? 'Gatesale' : 'Truck';
+            // Default to whichever type is actually selectable - Gatesale
+            // first, then Truck, per the gatesaleEnabled/truckEnabled flags.
+            // If neither is enabled for this facility the select is left on
+            // its natural default (both options disabled); submit is
+            // rejected client-side either way (see submitGatesaleRegistration).
+            if (gatesaleEnabled) {
+                document.getElementById('gatesale-reg-type').value = 'Gatesale';
+            } else if (truckEnabled) {
+                document.getElementById('gatesale-reg-type').value = 'Truck';
+            }
             ['gatesale-reg-name', 'gatesale-reg-email', 'gatesale-reg-phone', 'gatesale-reg-company', 'gatesale-reg-plate-no'].forEach(id => {
                 document.getElementById(id).value = '';
             });
@@ -1095,6 +1113,11 @@
                 // but the backend rejects this anyway - this is just a
                 // clearer message than letting the fetch below 403 silently.
                 alert('Gatesale self-service is not available at this facility.');
+                return;
+            }
+
+            if (visitorType === 'Truck' && !truckEnabled) {
+                alert('Truck self-service is not available at this facility.');
                 return;
             }
 

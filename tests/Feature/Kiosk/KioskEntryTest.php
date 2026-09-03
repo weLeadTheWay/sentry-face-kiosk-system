@@ -115,6 +115,69 @@ class KioskEntryTest extends TestCase
         );
     }
 
+    public function test_temporary_exit_is_rejected_when_facility_disables_breaks(): void
+    {
+        $facility = $this->createFacility('MADERA', 'Madera', isBreakEnabled: false);
+        $kiosk = KioskDevice::create([
+            'facility_id' => $facility->facility_id,
+            'device_name' => 'Break-Disabled Kiosk',
+            'serial_number' => 'SN-' . uniqid(),
+        ]);
+        $visitorRequest = VisitorRequest::create([
+            'directory_id' => $this->directory->directory_id,
+            'visitor_id' => 'VIS-' . uniqid(),
+            'facility_id' => $facility->facility_id,
+            'host_name' => 'Host',
+            'visit_datetime' => now(),
+            'registration_token' => 'REG_' . Str::upper(Str::random(8)),
+            'approval_status' => 'Approved',
+        ]);
+
+        $entry = function (string $action) use ($kiosk, $visitorRequest) {
+            return $this->postJson("/kiosk/{$kiosk->kiosk_id}/entry", [
+                'visitor_request_id' => $visitorRequest->visitor_request_id,
+                'action' => $action,
+            ], ['X-KIOSK-TOKEN' => $kiosk->kiosk_token]);
+        };
+
+        $entry('first_entry')->assertOk();
+
+        // The intermediate break must be rejected server-side, independent
+        // of whether the kiosk frontend even offers the button.
+        $entry('temporary_exit')
+            ->assertStatus(400)
+            ->assertJson(['success' => false]);
+
+        $session = VisitorSession::where('visitor_request_id', $visitorRequest->visitor_request_id)->first();
+        $this->assertEquals('Inside', $session->session_status);
+
+        // Leave Farm remains directly available - strictly one IN -> one OUT.
+        $entry('final_exit')->assertOk()->assertJson(['success' => true]);
+        $this->assertEquals('COMPLETED', $visitorRequest->fresh()->request_status);
+
+        $logs = VisitorEntryLog::whereHas('session', function ($q) use ($visitorRequest) {
+            $q->where('visitor_request_id', $visitorRequest->visitor_request_id);
+        })->orderBy('visitor_log_id')->pluck('movement_type')->all();
+        $this->assertEquals(['First Entry', 'Final Exit'], $logs);
+    }
+
+    public function test_already_started_break_is_not_retroactively_invalidated_by_a_later_flag_flip(): void
+    {
+        // Break enabled at the time the temporary exit is started...
+        $this->entry('first_entry')->assertOk();
+        $this->entry('temporary_exit')->assertOk();
+
+        // ...then an admin disables breaks for this facility mid-visit.
+        $this->visitorRequest->facility->update(['is_break_enabled' => false]);
+
+        // The visitor must still be able to Return and Leave Farm normally -
+        // the flag only prevents STARTING a new break, never resuming one
+        // already in progress.
+        $this->entry('return')->assertOk()->assertJson(['success' => true, 'session_status' => 'Inside']);
+        $this->entry('final_exit')->assertOk()->assertJson(['success' => true]);
+        $this->assertEquals('COMPLETED', $this->visitorRequest->fresh()->request_status);
+    }
+
     public function test_sheets_write_failure_does_not_block_entry(): void
     {
         $this->app->instance(VisitorSheetWriter::class, Mockery::mock(VisitorSheetWriter::class)

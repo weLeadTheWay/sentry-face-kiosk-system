@@ -128,6 +128,28 @@ class KioskRecognizeTest extends TestCase
         $this->assertEquals('no_session', $response->json('session_state.status'));
     }
 
+    public function test_recognition_response_reports_break_enabled_true_by_default(): void
+    {
+        $directory = $this->makeDirectoryWithFace(0.44);
+        $this->makeVisitorRequest($directory);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.44)]);
+
+        $response->assertOk()->assertJson(['success' => true, 'break_enabled' => true]);
+    }
+
+    public function test_recognition_response_reports_break_enabled_false_when_facility_disables_breaks(): void
+    {
+        $this->facility->update(['is_break_enabled' => false]);
+
+        $directory = $this->makeDirectoryWithFace(0.55);
+        $this->makeVisitorRequest($directory);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.55)]);
+
+        $response->assertOk()->assertJson(['success' => true, 'break_enabled' => false]);
+    }
+
     public function test_visitor_outside_departure_window_is_not_recognized(): void
     {
         $directory = $this->makeDirectoryWithFace(0.33);

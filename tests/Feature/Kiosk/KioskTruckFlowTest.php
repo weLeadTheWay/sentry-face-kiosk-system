@@ -487,4 +487,125 @@ class KioskTruckFlowTest extends TestCase
         $response->assertOk()->assertJson(['success' => true]);
         $this->assertEquals(1, UserDirectory::where('full_name', 'Unaffected Trucker')->count());
     }
+
+    // ---- facility_list.is_truck eligibility gate (mirrors is_gs's gate for Gatesale) ----
+
+    public function test_truck_recognition_is_rejected_when_facility_is_not_truck_enabled(): void
+    {
+        $this->facility->update(['is_truck' => false]);
+        $directory = $this->makeTruckDirectory(0.90);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.90)]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'truck_not_available']);
+        $this->assertEquals(0, VisitorRequest::count());
+    }
+
+    public function test_truck_create_visit_is_rejected_directly_when_facility_is_not_truck_enabled(): void
+    {
+        // Defense-in-depth: reject even when a client calls create-visit
+        // directly with a known directory_id, bypassing recognize() entirely.
+        $this->facility->update(['is_truck' => false]);
+        $directory = $this->makeTruckDirectory(0.91);
+
+        $response = $this->createVisit([
+            'directory_id' => $directory->directory_id,
+            'host_name' => 'H', 'origin' => 'O', 'purpose' => 'P',
+        ]);
+
+        $response->assertStatus(403);
+        $this->assertEquals(0, VisitorRequest::count());
+    }
+
+    public function test_truck_register_identity_is_rejected_when_facility_is_not_truck_enabled(): void
+    {
+        $this->facility->update(['is_truck' => false]);
+
+        $response = $this->registerIdentity([
+            'full_name' => 'Should Not Register',
+            'company' => 'New Co',
+            'plate_no' => 'NEW-0000',
+            'descriptor' => $this->descriptor(0.92),
+        ]);
+
+        $response->assertStatus(403)->assertJson(['success' => false, 'type' => 'truck_not_available']);
+        $this->assertEquals(0, UserDirectory::count());
+        $this->assertEquals(0, FaceProfile::count());
+    }
+
+    public function test_truck_resuming_an_already_active_visit_is_unaffected_by_a_later_flag_flip(): void
+    {
+        // The flag only gates NEW visits - a visit created while the
+        // facility was eligible must not be disrupted mid-visit if an admin
+        // later flips is_truck off.
+        $directory = $this->makeTruckDirectory(0.93);
+        $activeRequest = $this->makeActiveTruckRequest($directory);
+        VisitorSession::create([
+            'visitor_request_id' => $activeRequest->visitor_request_id,
+            'session_status' => 'Inside',
+            'login_id' => 'TRUCK002',
+            'first_in' => now(),
+        ]);
+
+        $this->facility->update(['is_truck' => false]);
+
+        $response = $this->recognize(['descriptor' => $this->descriptor(0.93)]);
+
+        $response->assertOk()->assertJson(['success' => true, 'type' => 'gatesale_match']);
+    }
+
+    public function test_truck_full_flow_succeeds_when_facility_is_truck_enabled(): void
+    {
+        $this->facility->update(['is_truck' => true]);
+
+        $register = $this->registerIdentity([
+            'full_name' => 'Eligible Facility Trucker',
+            'company' => 'New Co',
+            'plate_no' => 'NEW-1111',
+            'descriptor' => $this->descriptor(0.94),
+        ]);
+        $register->assertOk()->assertJson(['success' => true]);
+        $directoryId = $register->json('directory.directory_id');
+
+        $visit = $this->createVisit([
+            'directory_id' => $directoryId,
+            'host_name' => 'Host', 'origin' => 'Origin', 'purpose' => 'Purpose',
+        ]);
+
+        $visit->assertOk()->assertJson(['success' => true, 'type' => 'gatesale_match']);
+        $this->assertEquals(1, VisitorRequest::where('directory_id', $directoryId)->count());
+    }
+
+    public function test_gatesale_flow_is_unaffected_by_a_facility_with_truck_disabled(): void
+    {
+        // Symmetric to test_truck_flow_is_unaffected_by_a_facility_with_gatesale_disabled -
+        // is_truck only ever gates the Truck self-service branch.
+        $this->facility->update(['is_truck' => false]);
+
+        $response = $this->postJson("/kiosk/{$this->kiosk->kiosk_id}/gatesale/register-identity", [
+            'visitor_type' => 'Gatesale',
+            'full_name' => 'Unaffected Gatesale Visitor',
+            'company' => 'Acme',
+            'poses' => ['FRONT' => ['descriptor' => $this->descriptor(0.95)]],
+        ], ['X-KIOSK-TOKEN' => $this->kiosk->kiosk_token]);
+
+        $response->assertOk()->assertJson(['success' => true]);
+        $this->assertEquals(1, UserDirectory::where('full_name', 'Unaffected Gatesale Visitor')->count());
+    }
+
+    public function test_truck_eligibility_check_treats_a_kiosk_with_no_resolvable_facility_as_not_eligible(): void
+    {
+        // Simulates an invalid/nonexistent facility reference - the check
+        // must fail safe (not eligible) rather than error or default open.
+        // Built in-memory (never persisted) since kiosk_device.facility_id
+        // has a NOT NULL + CASCADE foreign key and cannot actually reference
+        // a nonexistent facility_list row in a real database.
+        $kioskWithBadFacility = new KioskDevice(['facility_id' => 999999]);
+
+        $method = new \ReflectionMethod(\App\Http\Controllers\Kiosk\KioskController::class, 'isTruckEligibleFacility');
+        $method->setAccessible(true);
+        $controller = $this->app->make(\App\Http\Controllers\Kiosk\KioskController::class);
+
+        $this->assertFalse($method->invoke($controller, $kioskWithBadFacility));
+    }
 }

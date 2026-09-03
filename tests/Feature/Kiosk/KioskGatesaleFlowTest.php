@@ -152,6 +152,30 @@ class KioskGatesaleFlowTest extends TestCase
         ], ['X-KIOSK-TOKEN' => $this->kiosk->kiosk_token]);
     }
 
+    public function test_gatesale_temporary_exit_is_rejected_when_facility_disables_breaks(): void
+    {
+        $this->facility->update(['is_break_enabled' => false]);
+
+        $directory = $this->makeGatesaleDirectory(0.90);
+        $activeRequest = $this->makeActiveGatesaleRequest($directory);
+        VisitorSession::create([
+            'visitor_request_id' => $activeRequest->visitor_request_id,
+            'session_status' => 'Inside',
+            'login_id' => 'GSBRK001',
+            'first_in' => now(),
+        ]);
+
+        // Break restriction applies to Gatesale/Truck the same as ordinary
+        // visitors, since both share VisitorKioskService::processEntry().
+        $this->entry($activeRequest->visitor_request_id, 'temporary_exit')
+            ->assertStatus(400)
+            ->assertJson(['success' => false]);
+
+        $this->entry($activeRequest->visitor_request_id, 'final_exit')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
     public function test_gatesale_face_without_active_request_returns_confirm_identity(): void
     {
         $directory = $this->makeGatesaleDirectory(0.10);

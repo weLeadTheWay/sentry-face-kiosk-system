@@ -240,6 +240,7 @@
                 @if(auth()->user()->hasPermission('facilities.manage'))
                     <li><a href="{{ route('facilities.index') }}" class="ajax-link">Facilities</a></li>
                     <li><a href="{{ route('facility-aliases.index') }}" class="ajax-link">Facility Aliases</a></li>
+                    <li><a href="{{ route('facility-configuration.index') }}" class="ajax-link">Facility Configuration</a></li>
                 @endif
                 @if(auth()->user()->hasPermission('kiosks.manage'))
                     <li><a href="{{ route('kiosks.index') }}" class="ajax-link">Kiosks</a></li>
