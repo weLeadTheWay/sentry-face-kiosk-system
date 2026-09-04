@@ -1,8 +1,8 @@
-name: Mirror to weLeadTheWay repo
+name: Mirror LRS prod to WLTW dev
 
 on:
   push:
-    branches: [master]
+    branches: [prod]
   workflow_dispatch:
 
 jobs:
@@ -12,10 +12,11 @@ jobs:
       - name: Checkout source repo (full history)
         uses: actions/checkout@v4
         with:
+          ref: prod
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Push to team repo
+      - name: Push to WLTW dev
         run: |
           git remote add sync https://x-access-token:${{ secrets.SENTRY_FACEKIOSK_TOKEN }}@github.com/weLeadTheWay/sentry-face-kiosk-system.git
-          git push sync HEAD:main --force
+          git push sync HEAD:dev --force
