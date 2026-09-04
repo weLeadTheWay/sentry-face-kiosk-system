@@ -1,0 +1,22 @@
+name: Mirror dev to prod
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Force-mirror dev to prod
+        run: |
+          git remote set-url origin https://x-access-token:${{ secrets.MIRROR_TOKEN }}@github.com/weLeadTheWay/sentry-face-kiosk-system.git
+          git push origin HEAD:prod --force
