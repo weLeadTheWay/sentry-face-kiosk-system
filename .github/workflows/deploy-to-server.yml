@@ -1,0 +1,28 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+jobs:
+  run_pull:
+    name: Pull latest changes on server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH key
+        run: |
+          set -e
+          install -m 600 -D /dev/null ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" > ~/.ssh/known_hosts
+
+      - name: Connect and pull latest changes
+        run: |
+          set -e
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "cd '${{ secrets.WORK_DIR }}' && git checkout '${{ secrets.MAIN_BRANCH }}' && git pull"
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -rf ~/.ssh
