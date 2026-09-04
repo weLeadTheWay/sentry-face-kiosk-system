@@ -16,12 +16,12 @@ jobs:
           set -e
           install -m 600 -D /dev/null ~/.ssh/id_rsa
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" > ~/.ssh/known_hosts
+          ssh-keyscan -t rsa -T 10 -p 3306 -H "${{ secrets.SSH_HOST }}" > ~/.ssh/known_hosts
 
       - name: Connect and pull latest changes
         run: |
           set -e
-          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "cd '${{ secrets.WORK_DIR }}' && git checkout '${{ secrets.MAIN_BRANCH }}' && git pull"
+          ssh -p 3306 "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "cd '${{ secrets.WORK_DIR }}' && git checkout '${{ secrets.MAIN_BRANCH }}' && git pull"
 
       - name: Cleanup SSH key
         if: always()
