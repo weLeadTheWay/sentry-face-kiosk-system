@@ -1843,3 +1843,30 @@ Face matching is an unindexed linear PHP scan (now up to 3x pose-comparison volu
 
 ### Most Important Files
 `app/Http/Controllers/Kiosk/KioskController.php` · `app/Services/Kiosk/VisitorKioskService.php` · `app/Services/Face/FaceMatchingService.php` · `public/js/face-enrollment.js` · `app/Services/VisitorSyncService.php` · `app/Services/GoogleSheets/VisitorSheetWriter.php` · `app/Console/Commands/ResolveExpiredVisitorSessions.php` · `app/Models/VisitorRequest.php` · `app/Traits/Auditable.php` · `app/Services/DowntimeMatrixImport/DowntimeMatrixImportService.php` · `app/Http/Controllers/Admin/FacilityConfigurationController.php`
+
+---
+
+## 18. Repository & Deployment Topology (added 2026-09-04)
+
+This section documents the CI/CD pipeline that moves code from this repo to the production server — infrastructure/deployment topology, not application business logic, so it lives in its own section rather than the module map above.
+
+**Repos and branches:**
+- `LouisaRSantos/sentry-kiosk-system` ("LRS") — the developer-facing repo this codebase is normally worked in. Branches: `dev` (default, ordinary development) and `prod` (promotion target).
+- `weLeadTheWay/sentry-face-kiosk-system` ("WLTW") — a mirror-only repo with no direct human commits. Branches: `dev` and `prod`, both pure automation targets (left unprotected; nothing should ever push to them by hand).
+
+**Pipeline (fully automatic after the one manual step):**
+```text
+LRS.dev (ordinary commits/pushes)
+   │  manual: open + merge a PR (dev → prod) in LRS — the intentional human gate
+   ▼
+LRS.prod  ──push triggers "Mirror LRS prod to WLTW dev" (LRS repo Action)──▶  WLTW.dev
+                                                                                  │  push triggers "Mirror dev to prod" (WLTW repo Action), automatic, no PR
+                                                                                  ▼
+                                                                              WLTW.prod  ◀── production server `git pull`
+```
+- `.github/workflows/sync.yml` (this repo): triggers on push to `prod`, force-pushes to WLTW's `dev` using the `SENTRY_FACEKIOSK_TOKEN` secret (a fine-grained PAT).
+- WLTW's own `.github/workflows/mirror-dev-to-prod.yml` (not in this repo — lives in the WLTW repo): triggers on push to `dev`, force-pushes to WLTW's own `prod` using WLTW's `MIRROR_TOKEN` secret.
+- Both secrets currently hold the **same underlying PAT** (a fine-grained token with Contents: read/write across the account's repos) — regenerating it requires updating both secrets together, in both repos.
+- The production server (InnMotion/cPanel, MariaDB + PHP 8.4) pulls from WLTW `prod` over HTTPS with its own separate read-only PAT — it never talks to the LRS repo directly.
+
+**Important:** pushing to LRS `dev` never triggers anything — only a push/merge to LRS `prod` starts the automated chain. This is the deliberate promotion gate the pipeline was built around.
